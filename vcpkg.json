@@ -3,7 +3,32 @@
   "version": "0.1.0",
   "builtin-baseline": "04f5ef77a311f53c9cf85f4bece29aecaee84521",
   "dependencies": [
-    "qtbase",
+    {
+      "name": "qtbase",
+      "default-features": false,
+      "features": [
+        "gui",
+        "widgets",
+        "testlib",
+        "thread",
+        "freetype",
+        "harfbuzz",
+        "png",
+        "jpeg",
+        "pcre2",
+        "doubleconversion",
+        "brotli",
+        "zstd",
+        "icu",
+        { "name": "dbus", "platform": "!(static & windows)" },
+        { "name": "opengl", "platform": "!ios" },
+        { "name": "egl", "platform": "linux" },
+        { "name": "fontconfig", "platform": "linux" },
+        { "name": "xcb", "platform": "linux" },
+        { "name": "xcb-xlib", "platform": "linux" },
+        { "name": "xrender", "platform": "linux" }
+      ]
+    },
     "boost-iostreams",
     "boost-interprocess",
     "zlib",

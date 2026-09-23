@@ -54,4 +54,6 @@ if(MSVC)
   target_compile_options(genieutils PRIVATE /W0)
 else()
   target_compile_options(genieutils PRIVATE -w)
+  set_property(SOURCE "${PCRIO_DIR}/pcrio.c" APPEND PROPERTY COMPILE_OPTIONS
+    -include "${CMAKE_CURRENT_LIST_DIR}/pcrio_compat.h")
 endif()

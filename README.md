@@ -71,6 +71,25 @@ symlinked path. Point it at the real directory:
 setx VCPKG_INSTALL_OPTIONS "--x-buildtrees-root=E:/Scoop/persist/vcpkg/buildtrees"
 ```
 
+## Building (Linux)
+
+Requirements: GCC or Clang, CMake ≥ 3.25, Ninja, vcpkg with `VCPKG_ROOT` set,
+and the X11/GL development packages Qt's xcb backend links against. On
+Debian/Ubuntu:
+
+```sh
+sudo apt install ninja-build autoconf autoconf-archive libtool bison flex \
+  '^libxcb.*-dev' libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  libgl-dev libglu1-mesa-dev libegl1-mesa-dev libxrender-dev libxi-dev
+cmake --preset ninja
+cmake --build --preset ninja-debug
+ctest --preset ninja-debug
+```
+
+The binary is at `build/ninja/Debug/NewAge`. `ui_test` needs an X display; on
+a headless machine run the tests under `Xvfb :99 -extension GLX &` with
+`DISPLAY=:99`.
+
 ### Tests and sample data
 
 Tests that need game data use the samples in the gitignored `data/` folder

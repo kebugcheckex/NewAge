@@ -7,4 +7,4 @@ vcpkg_installed/
 .claude/
 CMakeUserPresets.json
 *.user
-data/
+/data/
