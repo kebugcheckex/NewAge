@@ -13,6 +13,8 @@ namespace {
 
 const auto kUnitList = QStringLiteral("unitList");
 const auto kHideEmpty = QStringLiteral("hideEmpty");
+const auto kTechList = QStringLiteral("techList");
+const auto kHideUnavailable = QStringLiteral("hideUnavailable");
 
 } // namespace
 
@@ -88,6 +90,16 @@ bool Config::hideEmptyUnits() const
 void Config::setHideEmptyUnits(bool hide)
 {
     setValue(kUnitList, kHideEmpty, hide);
+}
+
+bool Config::hideUnavailableTechs() const
+{
+    return value(kTechList, kHideUnavailable).toBool(false);
+}
+
+void Config::setHideUnavailableTechs(bool hide)
+{
+    setValue(kTechList, kHideUnavailable, hide);
 }
 
 QJsonValue Config::value(const QString &section, const QString &key) const

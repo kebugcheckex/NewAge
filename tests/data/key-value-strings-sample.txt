@@ -1,0 +1,16 @@
+// Sample of a key-value string file for the NameProvider tests.
+// Real lines are copied from the Age2HD and AoE2DE English files; the 7000s are made up.
+//
+
+3125 "Sent to \"%s\":"
+5083 "Archer"
+5142 "Castle"
+6142 "Build Castle"
+IDS_OPT_ESC_MENU "ESC Menu"
+426071_perth "Create <b>Greek Noble Cavalry<b> (<cost>)\nPowerful Heavy Cavalry. Strong vs. Infantry and Foot Archers. Weak vs. Spearman-line and Priestesses. Only 12 can be fielded at any one time.\n\n<GREY><i>Upgrades: attack, armor (Blacksmith); speed, HP (Stable); more resistant to conversion (Temple).<i><DEFAULT>\n<hp> <attack> <armor> <piercearmor> <range>"
+   7000 "Indented"
+7001 ""
+7002 "Line\nbreak \\ end" // trailing comment
+7003 "Château"
+7004 "No closing quote
+7005 no quotes

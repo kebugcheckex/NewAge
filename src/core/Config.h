@@ -8,7 +8,7 @@ namespace newage {
 
 // User preferences, stored as a JSON file of sections:
 //
-//   { "unitList": { "hideEmpty": true } }
+//   { "unitList": { "hideEmpty": true }, "techList": { "hideUnavailable": false } }
 //
 // Missing or mistyped entries read as their defaults. Entries this build
 // doesn't know about are kept and written back on save, so older and newer
@@ -36,6 +36,10 @@ public:
     // Unit list: leave out unit slots that hold no unit.
     bool hideEmptyUnits() const;
     void setHideEmptyUnits(bool hide);
+
+    // Tech list: leave out techs the selected civ can't research.
+    bool hideUnavailableTechs() const;
+    void setHideUnavailableTechs(bool hide);
 
 signals:
     // Emitted after load() and after any setter that changes a value.

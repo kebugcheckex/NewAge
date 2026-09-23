@@ -37,13 +37,19 @@ target_link_libraries(newage_core PUBLIC Qt6::Core genie::genieutils)
 
 # --- model: field descriptors and Qt item models, no widgets -------------------
 add_library(newage_model STATIC
+  src/model/EntityListModel.cpp
+  src/model/EntityListModel.h
   src/model/FieldDesc.h
   src/model/FieldTreeModel.cpp
   src/model/FieldTreeModel.h
+  src/model/ListFilterModel.cpp
+  src/model/ListFilterModel.h
+  src/model/TechFields.cpp
+  src/model/TechFields.h
+  src/model/TechListModel.cpp
+  src/model/TechListModel.h
   src/model/UnitFields.cpp
   src/model/UnitFields.h
-  src/model/UnitFilterModel.cpp
-  src/model/UnitFilterModel.h
   src/model/UnitListModel.cpp
   src/model/UnitListModel.h
 )
@@ -74,12 +80,12 @@ endfunction()
 
 # --- ui: Qt Widgets front end -------------------------------------------------
 add_library(newage_ui STATIC
+  src/ui/EntityBrowser.cpp
+  src/ui/EntityBrowser.h
   src/ui/MainWindow.cpp
   src/ui/MainWindow.h
   src/ui/OptionsDialog.cpp
   src/ui/OptionsDialog.h
-  src/ui/UnitBrowser.cpp
-  src/ui/UnitBrowser.h
 )
 target_link_libraries(newage_ui PUBLIC newage_model Qt6::Widgets)
 

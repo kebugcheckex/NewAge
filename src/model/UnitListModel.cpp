@@ -2,91 +2,70 @@
 
 #include "core/Session.h"
 #include "genie/dat/DatFile.h"
+#include "model/FieldTreeModel.h"
+#include "model/UnitFields.h"
 
 namespace newage {
 
 UnitListModel::UnitListModel(Session *session, QObject *parent)
-    : QAbstractListModel(parent), session_(session)
+    : EntityListModel(session, parent)
 {
-    connect(session_, &Session::closed, this, [this] { setCiv(-1); });
-}
-
-void UnitListModel::setCiv(int civ)
-{
-    beginResetModel();
-    const bool valid = session_->isOpen() && civ >= 0 && civ < static_cast<int>(session_->dat()->Civs.size());
-    civ_ = valid ? civ : -1;
-    endResetModel();
 }
 
 const genie::Unit *UnitListModel::unit(int row) const
 {
-    if (!hasUnit(row))
+    if (!isActive(row))
         return nullptr;
-    return &session_->dat()->Civs.at(civ_).Units.at(row);
+    return &session()->dat()->Civs.at(civ()).Units.at(row);
 }
 
 int UnitListModel::rowCount(const QModelIndex &parent) const
 {
-    if (parent.isValid() || civ_ < 0 || !session_->isOpen())
+    if (parent.isValid() || !hasCiv())
         return 0;
-    return static_cast<int>(session_->dat()->Civs.at(civ_).Units.size());
+    return static_cast<int>(session()->dat()->Civs.at(civ()).Units.size());
 }
 
-QVariant UnitListModel::data(const QModelIndex &index, int role) const
-{
-    if (!index.isValid())
-        return {};
-
-    const int row = index.row();
-    switch (role)
-    {
-    case HasUnitRole:
-        return hasUnit(row);
-    case Qt::DisplayRole:
-        return QStringLiteral("%1 - %2").arg(row).arg(unitName(row));
-    case Qt::ToolTipRole:
-        if (const genie::Unit *u = unit(row))
-            return QString::fromLatin1(u->Name);
-        return {};
-    case SearchTextRole:
-    {
-        QString text = QStringLiteral("%1 - %2").arg(row).arg(unitName(row));
-        if (const genie::Unit *u = unit(row))
-            text += QLatin1Char(' ') + QString::fromLatin1(u->Name);
-        return text;
-    }
-    default:
-        return {};
-    }
-}
-
-QString UnitListModel::unitName(int row) const
+QString UnitListModel::name(int row) const
 {
     const genie::Unit *u = unit(row);
     if (!u)
         return tr("(empty)");
-    if (const QString name = session_->names().text(u->LanguageDLLName); !name.isEmpty())
+    if (const QString name = session()->names().text(u->LanguageDLLName); !name.isEmpty())
         return name;
     if (!u->Name.empty())
         return QString::fromLatin1(u->Name);
     return tr("(unnamed)");
 }
 
+void UnitListModel::showFields(int row, FieldTreeModel &fields) const
+{
+    if (const genie::Unit *u = unit(row))
+        fields.setObject(unitFields(), *u, &session()->names());
+    else
+        fields.clear();
+}
+
 Qt::ItemFlags UnitListModel::flags(const QModelIndex &index) const
 {
-    if (!index.isValid() || !hasUnit(index.row()))
+    if (!index.isValid() || !isActive(index.row()))
         return Qt::NoItemFlags;
     return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
 }
 
-bool UnitListModel::hasUnit(int row) const
+bool UnitListModel::isActive(int row) const
 {
-    if (civ_ < 0 || !session_->isOpen())
+    if (!hasCiv())
         return false;
-    const genie::Civ &civ = session_->dat()->Civs.at(civ_);
+    const genie::Civ &civ = session()->dat()->Civs.at(this->civ());
     return row >= 0 && row < static_cast<int>(civ.Units.size()) && row < static_cast<int>(civ.UnitPointers.size())
            && civ.UnitPointers.at(row) != 0;
+}
+
+QString UnitListModel::internalName(int row) const
+{
+    const genie::Unit *u = unit(row);
+    return u ? QString::fromLatin1(u->Name) : QString();
 }
 
 } // namespace newage

@@ -20,5 +20,5 @@ newage_add_test(config_test ConfigTest.cpp newage_core)
 # Also runs on a real install in NEWAGE_TEST_GAME_DIR when set.
 newage_add_test(gamedata_test GameDataTest.cpp newage_core)
 newage_add_test(model_test ModelTest.cpp newage_model)
-newage_add_test(ui_test UnitBrowserTest.cpp newage_ui)
+newage_add_test(ui_test BrowserTest.cpp newage_ui)
 newage_deploy_qt_plugins(ui_test)

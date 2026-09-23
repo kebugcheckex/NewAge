@@ -13,14 +13,17 @@
 #include <QSettings>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QTabWidget>
 
 #include "core/Config.h"
 #include "core/GameInstall.h"
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "model/TechListModel.h"
+#include "model/UnitListModel.h"
+#include "ui/EntityBrowser.h"
 #include "ui/OptionsDialog.h"
-#include "ui/UnitBrowser.h"
 
 namespace newage {
 
@@ -43,12 +46,19 @@ MainWindow::MainWindow(Config *config, QWidget *parent)
       session_(new Session(this)),
       pages_(new QStackedWidget(this)),
       placeholder_(new QLabel(tr("No data open. Use File > Open Game Folder."), this)),
-      unitBrowser_(new UnitBrowser(session_, config_, this)),
+      browsers_(new QTabWidget(this)),
       fileInfo_(new QLabel(this))
 {
     placeholder_->setAlignment(Qt::AlignCenter);
     pages_->addWidget(placeholder_);
-    pages_->addWidget(unitBrowser_);
+    browsers_->setDocumentMode(true);
+    browsers_->addTab(new EntityBrowser(session_, config_, new UnitListModel(session_), &Config::hideEmptyUnits,
+                                        tr("Filter units")),
+                      tr("&Units"));
+    browsers_->addTab(new EntityBrowser(session_, config_, new TechListModel(session_),
+                                        &Config::hideUnavailableTechs, tr("Filter techs")),
+                      tr("T&echs"));
+    pages_->addWidget(browsers_);
     setCentralWidget(pages_);
     statusBar()->addPermanentWidget(fileInfo_);
 
@@ -142,7 +152,7 @@ void MainWindow::openGameFolder()
     }
     statusBar()->showMessage(tr("Loaded %1").arg(dataset.title), 5000);
     if (dataset.languageFiles.isEmpty())
-        warnings << tr("No language files were found, so units show their internal names.");
+        warnings << tr("No language files were found, so units and techs show their internal names.");
     if (!warnings.isEmpty())
         QMessageBox::warning(this, tr("Language files"), warnings.join(QLatin1Char('\n')));
 }
@@ -159,7 +169,7 @@ void MainWindow::openDataFile()
         return;
 
     // A loose .dat file: the user picks the version, and there are no language
-    // strings, so units show their internal names.
+    // strings, so units and techs show their internal names.
     QStringList names;
     int current = 0;
     const QString lastKey = settings.value(kLastVersionKey).toString();
@@ -263,14 +273,15 @@ void MainWindow::refresh()
     setWindowTitle(QStringLiteral("%1%2 - NewAge")
                        .arg(QFileInfo(session_->datPath()).fileName(),
                             session_->isModified() ? QStringLiteral("*") : QString()));
-    pages_->setCurrentWidget(unitBrowser_);
+    pages_->setCurrentWidget(browsers_);
 
     const genie::DatFile &dat = *session_->dat();
     const int languageFiles = static_cast<int>(session_->names().files().size());
-    fileInfo_->setText(tr("%1 | %2 civs | %3 units | %4")
+    fileInfo_->setText(tr("%1 | %2 civs | %3 units | %4 techs | %5")
                            .arg(QString::fromLatin1(dat.FileVersion.c_str()))
                            .arg(dat.Civs.size())
                            .arg(dat.Civs.front().Units.size())
+                           .arg(dat.Techs.size())
                            .arg(languageFiles ? tr("%n language file(s)", nullptr, languageFiles)
                                               : tr("no language files")));
 }

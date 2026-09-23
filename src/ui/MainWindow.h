@@ -4,12 +4,12 @@
 
 class QLabel;
 class QStackedWidget;
+class QTabWidget;
 
 namespace newage {
 
 class Config;
 class Session;
-class UnitBrowser;
 
 class MainWindow : public QMainWindow
 {
@@ -35,7 +35,8 @@ private:
     Session *session_;
     QStackedWidget *pages_;
     QLabel *placeholder_;
-    UnitBrowser *unitBrowser_;
+    // Units and Techs tabs, shown while data is open.
+    QTabWidget *browsers_;
     QLabel *fileInfo_;
     QAction *saveAsAction_ = nullptr;
 };

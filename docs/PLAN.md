@@ -87,8 +87,8 @@ AGE logic worth porting as-is:
   src/app/     main.cpp
   src/core/    Session, VersionProfile, Config    (QtCore only, no widgets)
   src/model/   FieldDesc, descriptor tables, Qt item models   (QtCore only)
-  src/ui/      MainWindow, UnitBrowser, OptionsDialog; later OpenDialog, PropertyEditor
-  tests/       Qt Test: load/save round-trip, config, models, UnitBrowser smoke test
+  src/ui/      MainWindow, EntityBrowser, OptionsDialog; later OpenDialog, PropertyEditor
+  tests/       Qt Test: load/save round-trip, config, models, browser smoke test
   ```
 
 - **Targets:** `genieutils` → `newage_core` → `newage_model` → `newage_ui`
@@ -108,12 +108,12 @@ AGE logic worth porting as-is:
 | M1 | Headless load → save → compare round-trip test | Done; passes on both samples |
 | M2 | `Session` + settings + open a game installation | Done except the recent list, locale choice and version combo (see M2b) |
 | M3 | `NameProvider` for language strings | Done for unit labels and the two unit string-ID fields |
-| M4 | Field descriptors + generic property editor | Read-only subset done (see M4a) |
-| M5 | First vertical slice: Civs → Units with undo | Read-only browser done (see M4a) |
+| M4 | Field descriptors + generic property editor | Read-only subset done (see M4a, M4b) |
+| M5 | First vertical slice: Civs → Units with undo | Read-only unit and tech browsers done (see M4a, M4b) |
 
 ### M0: Build skeleton
 `MainWindow` has File → Open / Save As / Exit. Once a file is open it shows
-the unit browser, with file version and counts in the status bar. This proved
+the unit and tech browsers, with file version and counts in the status bar. This proved
 the MSVC + vcpkg + Qt + genieutils toolchain before any real UI work.
 
 ### M1: Round-trip test
@@ -142,15 +142,63 @@ A thin first cut of M4 + M5, skipping M3:
   `DatFile`, so it can't dangle.
 - `UnitListModel` lists every unit slot of one civ (row == unit index). Slots
   with `Civ::UnitPointers[i] == 0` show as "(empty)" and are not selectable.
-- `UnitBrowser` (`src/ui/`): civ combo (starts on civ 1, since civ 0 is Gaia),
+- `UnitBrowser` (`src/ui/`, now `EntityBrowser`, see M4b): civ combo (starts on civ 1, since civ 0 is Gaia),
   filter box, unit list, field tree. Switching civ keeps the same unit
   selected. List labels follow the M3 label rule ("82 - Castle"). The
   tooltip shows the internal name, and the filter matches either.
-- `UnitFilterModel` wraps the list: the text filter, plus hiding empty slots
-  (via `UnitListModel::HasUnitRole`) when the `unitList.hideEmpty` option is
-  on. Row == unit index still holds in the source model.
+- `UnitFilterModel` (now `ListFilterModel`) wraps the list: the text filter,
+  plus hiding empty slots when the `unitList.hideEmpty` option is on. Row ==
+  unit index still holds in the source model.
 - Not shown yet: list-valued data (attacks/armours, costs, damage graphics,
   tasks) and type-specific sub-structs beyond Speed.
+
+### M4b: Read-only tech list (done)
+The unit browser's layout for techs, and the first step towards "a new entity
+type is a descriptor table plus a list model" (M5).
+
+- **What "per civ" means.** Techs are global (`DatFile::Techs`, no ID field;
+  the ID is the index), unlike units, and AGE lists them without a civ. NewAge
+  lists every tech (row == tech ID, so the selection survives civ switches)
+  and marks which ones the selected civ can research
+  (`TechListModel::Availability`):
+  - `OtherCiv`: `Tech::Civ` is set and names another civ (unique techs, civ
+    bonuses, and in TC many Gaia-only techs with `Civ == 0`). Only stored
+    from AoK on; older files read as `-1`, all civs.
+  - `DisabledByTechTree`: the civ's tech tree effect (`Civ::TechTreeID`) has a
+    "disable tech" command (type 102) with the tech ID in `D`.
+  - Otherwise `Available`. Worked out once per civ switch.
+- Unavailable techs are drawn grey but stay selectable, since they still
+  have data to look at. The `techList.hideUnavailable` option hides them.
+  Tooltips give the internal name and the reason.
+- Shared pieces, extracted from the unit browser:
+  - `EntityListModel` (`src/model/`): base for per-civ entity lists. It holds
+    the civ, resets on `Session::closed`, and provides the "ID - name" label,
+    tooltip, `SearchTextRole` and `ActiveRole` (empty unit slot / unavailable
+    tech = inactive). Subclasses give `name()` (the M3 label rule),
+    `isActive()`, `internalName()` and `showFields()`, which binds their
+    descriptor table to a `FieldTreeModel`.
+  - `ListFilterModel` (was `UnitFilterModel`): text filter plus hiding
+    inactive rows.
+  - `EntityBrowser` (`src/ui/`, was `UnitBrowser`): civ combo, filter, list,
+    field tree for any `EntityListModel`. It takes the model, the `Config`
+    getter that hides inactive rows, and the filter placeholder. A delegate
+    greys inactive rows (the model layer is QtCore-only, so no colours in the
+    model).
+- `techFields()` (`src/model/TechFields.cpp`) works on `TechRef {id, tech}`
+  because `genie::Tech` has no ID. Groups: General (ID, internal name,
+  language name / description as string IDs, Type `0 - Regular` / `2 - Age`,
+  Civ, Effect, Icon, Full tech mode), Requirements (4 or 6 required techs +
+  count), Costs (3 × resource / amount / paid), Research location (first
+  location's building, time, button).
+- `MainWindow` shows the browsers as **Units** and **Techs** tabs. Each has its
+  own civ combo. The status bar adds the tech count.
+- Not shown yet: the Help and Tech tree string IDs (`LanguageDLLHelp` /
+  `LanguageDLLTechTree` carry a 100000 / 150000 offset whose lookup rule
+  needs checking), `Repeatable` (C15+), `Name2` (SWGB), DE's extra research
+  locations, and names next to ID references (Civ, Effect, required techs,
+  location), which wait for `RefKind`.
+- Follow-up: tech tree effects also disable units (command type 2). The unit
+  list could mark those the same way.
 
 ### M2: Session and settings
 - `newage::Session` owns the `DatFile`, the detected `GameVersion`, the path
@@ -163,7 +211,7 @@ A thin first cut of M4 + M5, skipping M3:
   `changed()` fires on load and on any real change, and views re-read what
   they use. `main()` loads it (on a bad file: warning, then defaults).
   Tools > Options (`OptionsDialog`, one group box per section) edits it, and
-  `MainWindow` saves it on OK. First entry: `unitList.hideEmpty`. Adding an
+  `MainWindow` saves it on OK. Entries: `unitList.hideEmpty`, `techList.hideUnavailable`. Adding an
   entry means a getter/setter in `Config` plus a widget in `OptionsDialog`.
   Transient state (last folder, last version) stays in `QSettings`.
 - Next steps:
@@ -359,7 +407,8 @@ struct FieldDesc {
   pre-C15 versions must stay in `int16_t` range.
 
 ### M5: First vertical slice (Civs → Units)
-- `EntityListModel` (`QAbstractListModel`) + `QSortFilterProxyModel` for search.
+- `EntityListModel` (`QAbstractListModel`) + `QSortFilterProxyModel` for search
+  (read-only versions exist since M4b).
 - Civ selector + unit list + `PropertyEditor`.
 - All edits go through `QUndoStack` / `QUndoCommand`, which gives undo/redo
   for free (AGE has none) and drives `Session::setModified`.

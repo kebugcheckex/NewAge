@@ -22,6 +22,7 @@ public:
 private:
     Config *config_;
     QCheckBox *hideEmptyUnits_;
+    QCheckBox *hideUnavailableTechs_;
 };
 
 } // namespace newage
