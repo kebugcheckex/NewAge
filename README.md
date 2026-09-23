@@ -99,3 +99,8 @@ ctest --preset msvc-debug -R gamedata
 
 `ui_test` saves a screenshot of the unit browser if `NEWAGE_UI_SCREENSHOT` is
 set to a `.png` path.
+
+## License
+
+**GNU GPLv3**; see [LICENSE](LICENSE). NewAge links genieutils (LGPLv3) and
+pcrio (BSD).
