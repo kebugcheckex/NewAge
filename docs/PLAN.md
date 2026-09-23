@@ -80,36 +80,66 @@ AGE logic worth porting as-is:
   ```
   src/app/     main.cpp
   src/core/    Session, VersionProfile            (QtCore only, no widgets)
-  src/model/   FieldDescriptor, descriptor tables, Qt models   (planned)
-  src/ui/      MainWindow, later OpenDialog, EntityBrowser, PropertyEditor
-  tests/       Qt Test: load/save round-trip, sanity checks
+  src/model/   FieldDesc, descriptor tables, Qt item models   (QtCore only)
+  src/ui/      MainWindow, UnitBrowser; later OpenDialog, PropertyEditor
+  tests/       Qt Test: load/save round-trip, models, UnitBrowser smoke test
   ```
 
-- **Targets:** `genieutils` → `newage_core` (static) → `NewAge` (exe);
-  `roundtrip_test` links only `newage_core`.
+- **Targets:** `genieutils` → `newage_core` → `newage_model` → `newage_ui`
+  (all static) → `NewAge` (exe). Each test links the lowest layer it needs:
+  `roundtrip_test` → core, `model_test` → model, `ui_test` → ui.
+- **Sample data:** the gitignored `data/` folder holds
+  `empires2_x1_p1.dat` (The Conquerors, `tc`) and `empires2_x2_p1.dat`
+  (HD Edition, `aokhd`, file version `VER 5.7`). Tests that need them skip
+  when they are missing.
 
 ## 3. Core module milestones
 
 | #  | Milestone | Status |
 |----|-----------|--------|
-| M0 | Build skeleton: Qt window, genieutils linked, open a `.dat` and show counts | Builds (MSVC Debug); not yet tried on a real `.dat` |
-| M1 | Headless load → save → compare round-trip test | Scaffolded (needs a sample `.dat`) |
+| M0 | Build skeleton: Qt window, genieutils linked, open a `.dat` and show counts | Done |
+| M1 | Headless load → save → compare round-trip test | Done; passes on both samples |
 | M2 | `Session` + settings + open dialog / profiles | `Session` done; open dialog is a temporary picker |
 | M3 | `NameProvider` for language strings | Planned |
-| M4 | Field descriptors + generic property editor | Planned |
-| M5 | First vertical slice: Civs → Units with undo | Planned |
+| M4 | Field descriptors + generic property editor | Read-only subset done (see M4a) |
+| M5 | First vertical slice: Civs → Units with undo | Read-only browser done (see M4a) |
 
 ### M0: Build skeleton
-`MainWindow` has File → Open / Save As / Exit and shows a summary (file
-version, detected game version, entity counts). This proves the MSVC + vcpkg
-+ Qt + genieutils toolchain before any real UI work.
+`MainWindow` has File → Open / Save As / Exit. Once a file is open it shows
+the unit browser, with file version and counts in the status bar. This proved
+the MSVC + vcpkg + Qt + genieutils toolchain before any real UI work.
 
 ### M1: Round-trip test
-`tests/RoundTripTest.cpp` loads the file in `NEWAGE_TEST_DAT` (version key in
-`NEWAGE_TEST_VERSION`, default `aoe2de`), saves it unchanged, and compares the
-**decompressed** payloads (`DatFile::extractRaw`), because zlib output can
-differ byte-wise even when the data is identical. It is skipped when the
-variable is unset. It is the safety net for every change that follows.
+`tests/RoundTripTest.cpp` loads each sample in `data/` (plus the file in
+`NEWAGE_TEST_DAT`, version key in `NEWAGE_TEST_VERSION`, default `aoe2de`, when
+set), saves it unchanged, and compares the **decompressed** payloads
+(`DatFile::extractRaw`), because zlib output can differ byte-wise even when
+the data is identical. It is the safety net for every change that follows.
+
+genieutils does not always throw on a bad load: an unrecognised DE file
+version prints "Unsupported version" and returns, and some wrong version
+choices parse to zero civs. `Session::open` treats "no civs" as a failure.
+
+### M4a: Read-only unit browser (done)
+A thin first cut of M4 + M5, skipping M3:
+
+- `FieldDesc<T>` (`src/model/FieldDesc.h`) has only `name`, `group`,
+  `applies`, `get`. `unitFields()` (`src/model/UnitFields.cpp`) covers ~20
+  scalar fields common to all versions: ID, Type, Class, internal name,
+  language IDs, HP, LOS, Speed (`applies`: Type >= 20), garrison/resource
+  capacity, collision size, standing/dying graphics, icon, Enabled, Hide in
+  editor.
+- `FieldTreeModel` is entity-agnostic: `setObject(fields, obj)` snapshots the
+  applicable values, grouped under headings. Floats display in shortest
+  round-trip form (`0.2`, not `0.200000003`). It holds no pointer into the
+  `DatFile`, so it can't dangle.
+- `UnitListModel` lists every unit slot of one civ (row == unit index). Slots
+  with `Civ::UnitPointers[i] == 0` show as "(empty)" and are not selectable.
+- `UnitBrowser` (`src/ui/`): civ combo (starts on civ 1, since civ 0 is Gaia),
+  filter box, unit list, field tree. Switching civ keeps the same unit
+  selected. List labels use the internal name until M3 exists.
+- Not shown yet: list-valued data (attacks/armours, costs, damage graphics,
+  tasks) and type-specific sub-structs beyond Speed.
 
 ### M2: Session and settings
 - `newage::Session` owns the `DatFile`, the detected `GameVersion`, the path
@@ -162,6 +192,9 @@ struct FieldDesc {
   `LanguageDLLNameU16`) and must pick the member by game version.
 - A descriptor-sanity test checks that every descriptor round-trips through
   get/set on a default-constructed object.
+- Editing the language IDs: genieutils widens the 16-bit union members into
+  the 32-bit ones on load, so reads are version-independent, but writes for
+  pre-C15 versions must stay in `int16_t` range.
 
 ### M5: First vertical slice (Civs → Units)
 - `EntityListModel` (`QAbstractListModel`) + `QSortFilterProxyModel` for search.

@@ -15,6 +15,7 @@ class RoundTripTest : public QObject
 
 private slots:
     void versionProfileKeysAreUnique();
+    void loadSaveRoundTrip_data();
     void loadSaveRoundTrip();
 };
 
@@ -30,15 +31,31 @@ void RoundTripTest::versionProfileKeysAreUnique()
     QCOMPARE(findVersionProfile(QStringLiteral("no-such-version")), nullptr);
 }
 
+// Runs on the samples in the gitignored data/ folder, plus NEWAGE_TEST_DAT
+// (version key in NEWAGE_TEST_VERSION, default aoe2de) when it is set.
+void RoundTripTest::loadSaveRoundTrip_data()
+{
+    QTest::addColumn<QString>("datPath");
+    QTest::addColumn<QString>("versionKey");
+
+    QTest::newRow("sample tc") << QStringLiteral(NEWAGE_SAMPLE_DATA_DIR "/empires2_x1_p1.dat") << QStringLiteral("tc");
+    QTest::newRow("sample aokhd") << QStringLiteral(NEWAGE_SAMPLE_DATA_DIR "/empires2_x2_p1.dat")
+                                  << QStringLiteral("aokhd");
+    QTest::newRow("NEWAGE_TEST_DAT") << qEnvironmentVariable("NEWAGE_TEST_DAT")
+                                     << qEnvironmentVariable("NEWAGE_TEST_VERSION", QStringLiteral("aoe2de"));
+}
+
 // Loads a real .dat, saves it unchanged, and compares the *decompressed*
 // payloads: zlib output can differ byte-wise even when the data is identical.
 void RoundTripTest::loadSaveRoundTrip()
 {
-    const QString datPath = qEnvironmentVariable("NEWAGE_TEST_DAT");
+    QFETCH(QString, datPath);
+    QFETCH(QString, versionKey);
     if (datPath.isEmpty())
-        QSKIP("Set NEWAGE_TEST_DAT to a .dat file to run this test.");
+        QSKIP("Set NEWAGE_TEST_DAT to a .dat file to run this row.");
+    if (!QFile::exists(datPath))
+        QSKIP(qPrintable(QStringLiteral("%1 not present.").arg(datPath)));
 
-    const QString versionKey = qEnvironmentVariable("NEWAGE_TEST_VERSION", QStringLiteral("aoe2de"));
     const VersionProfile *profile = findVersionProfile(versionKey);
     QVERIFY2(profile, qPrintable(QStringLiteral("Unknown NEWAGE_TEST_VERSION: ") + versionKey));
 

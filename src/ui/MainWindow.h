@@ -3,10 +3,12 @@
 #include <QMainWindow>
 
 class QLabel;
+class QStackedWidget;
 
 namespace newage {
 
 class Session;
+class UnitBrowser;
 
 class MainWindow : public QMainWindow
 {
@@ -27,7 +29,10 @@ private:
     void refresh();
 
     Session *session_;
-    QLabel *summary_;
+    QStackedWidget *pages_;
+    QLabel *placeholder_;
+    UnitBrowser *unitBrowser_;
+    QLabel *fileInfo_;
     QAction *saveAsAction_ = nullptr;
 };
 

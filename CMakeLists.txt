@@ -23,19 +23,25 @@ add_library(newage_core STATIC
 target_include_directories(newage_core PUBLIC src)
 target_link_libraries(newage_core PUBLIC Qt6::Core genie::genieutils)
 
-# --- app: Qt Widgets front end ------------------------------------------------
-qt_add_executable(NewAge WIN32
-  src/app/main.cpp
-  src/ui/MainWindow.cpp
-  src/ui/MainWindow.h
+# --- model: field descriptors and Qt item models, no widgets -------------------
+add_library(newage_model STATIC
+  src/model/FieldDesc.h
+  src/model/FieldTreeModel.cpp
+  src/model/FieldTreeModel.h
+  src/model/UnitFields.cpp
+  src/model/UnitFields.h
+  src/model/UnitListModel.cpp
+  src/model/UnitListModel.h
 )
-target_link_libraries(NewAge PRIVATE newage_core Qt6::Widgets)
-target_compile_definitions(NewAge PRIVATE NEWAGE_VERSION="${PROJECT_VERSION}")
+target_link_libraries(newage_model PUBLIC newage_core)
 
-# vcpkg's applocal step copies linked DLLs next to the exe but not Qt plugins,
+# vcpkg's applocal step copies linked DLLs next to an exe but not Qt plugins,
 # which Qt loads at runtime from <exe dir>/<plugin type>/. Copy the ones we need
-# so the exe runs straight from the build tree (Debug or Release variant).
-if(WIN32)
+# so `target` runs straight from the build tree (Debug or Release variant).
+function(newage_deploy_qt_plugins target)
+  if(NOT WIN32)
+    return()
+  endif()
   foreach(plugin IN ITEMS
       "Qt6::QWindowsIntegrationPlugin|platforms"
       "Qt6::QModernWindowsStylePlugin|styles")
@@ -43,16 +49,33 @@ if(WIN32)
     list(GET plugin 0 plugin_target)
     list(GET plugin 1 plugin_dir)
     if(TARGET ${plugin_target})
-      add_custom_command(TARGET NewAge POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:NewAge>/${plugin_dir}"
+      add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/${plugin_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:${plugin_target}>" "$<TARGET_FILE_DIR:NewAge>/${plugin_dir}/"
+                "$<TARGET_FILE:${plugin_target}>" "$<TARGET_FILE_DIR:${target}>/${plugin_dir}/"
         VERBATIM)
     endif()
   endforeach()
-endif()
+endfunction()
 
-foreach(target newage_core NewAge)
+# --- ui: Qt Widgets front end -------------------------------------------------
+add_library(newage_ui STATIC
+  src/ui/MainWindow.cpp
+  src/ui/MainWindow.h
+  src/ui/UnitBrowser.cpp
+  src/ui/UnitBrowser.h
+)
+target_link_libraries(newage_ui PUBLIC newage_model Qt6::Widgets)
+
+# --- app ----------------------------------------------------------------------
+qt_add_executable(NewAge WIN32
+  src/app/main.cpp
+)
+target_link_libraries(NewAge PRIVATE newage_ui)
+target_compile_definitions(NewAge PRIVATE NEWAGE_VERSION="${PROJECT_VERSION}")
+newage_deploy_qt_plugins(NewAge)
+
+foreach(target newage_core newage_model newage_ui NewAge)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
   else()

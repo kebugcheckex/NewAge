@@ -10,11 +10,13 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QSettings>
+#include <QStackedWidget>
 #include <QStatusBar>
 
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "ui/UnitBrowser.h"
 
 namespace newage {
 
@@ -27,11 +29,18 @@ const auto kDatFilter = QStringLiteral("Genie data files (*.dat);;All files (*)"
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent), session_(new Session(this)), summary_(new QLabel(this))
+    : QMainWindow(parent),
+      session_(new Session(this)),
+      pages_(new QStackedWidget(this)),
+      placeholder_(new QLabel(tr("No data open. Use File > Open."), this)),
+      unitBrowser_(new UnitBrowser(session_, this)),
+      fileInfo_(new QLabel(this))
 {
-    summary_->setAlignment(Qt::AlignCenter);
-    summary_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    setCentralWidget(summary_);
+    placeholder_->setAlignment(Qt::AlignCenter);
+    pages_->addWidget(placeholder_);
+    pages_->addWidget(unitBrowser_);
+    setCentralWidget(pages_);
+    statusBar()->addPermanentWidget(fileInfo_);
 
     createActions();
 
@@ -153,35 +162,21 @@ void MainWindow::refresh()
     if (!session_->isOpen())
     {
         setWindowTitle(QStringLiteral("NewAge"));
-        summary_->setText(tr("No data open. Use File > Open."));
+        pages_->setCurrentWidget(placeholder_);
+        fileInfo_->clear();
         return;
     }
 
     setWindowTitle(QStringLiteral("%1%2 - NewAge")
                        .arg(QFileInfo(session_->datPath()).fileName(),
                             session_->isModified() ? QStringLiteral("*") : QString()));
+    pages_->setCurrentWidget(unitBrowser_);
 
-    // Placeholder until the entity browser exists.
     const genie::DatFile &dat = *session_->dat();
-    const size_t unitCount = dat.Civs.empty() ? 0 : dat.Civs.front().Units.size();
-    summary_->setText(tr("File version: %1\n"
-                         "genieutils game version: %2\n\n"
-                         "Civilizations: %3\n"
-                         "Units (per civ): %4\n"
-                         "Techs: %5\n"
-                         "Effects: %6\n"
-                         "Graphics: %7\n"
-                         "Sounds: %8\n"
-                         "Terrains: %9")
-                          .arg(QString::fromStdString(dat.FileVersion))
-                          .arg(static_cast<int>(session_->gameVersion()))
-                          .arg(dat.Civs.size())
-                          .arg(unitCount)
-                          .arg(dat.Techs.size())
-                          .arg(dat.Effects.size())
-                          .arg(dat.Graphics.size())
-                          .arg(dat.Sounds.size())
-                          .arg(dat.TerrainBlock.Terrains.size()));
+    fileInfo_->setText(tr("%1 | %2 civs | %3 units")
+                           .arg(QString::fromLatin1(dat.FileVersion.c_str()))
+                           .arg(dat.Civs.size())
+                           .arg(dat.Civs.front().Units.size()));
 }
 
 } // namespace newage
