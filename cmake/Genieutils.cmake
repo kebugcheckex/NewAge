@@ -1,18 +1,20 @@
-# Builds genieutils (+ pcrio) as a static library target from sibling checkouts.
+# Builds genieutils (+ pcrio) as a static library target from the submodules
+# in extern/. Point GENIEUTILS_DIR / PCRIO_DIR elsewhere to build against a
+# working checkout instead.
 #
 # genieutils' own CMakeLists uses directory-wide include paths and GCC-only
 # flags, so we compile its sources here instead of add_subdirectory()-ing it.
-# The sources are used straight from the working tree (including uncommitted
-# changes); switch to submodules once genieutils is stable.
 
-set(GENIEUTILS_DIR "${CMAKE_SOURCE_DIR}/../genieutils" CACHE PATH "Path to the genieutils checkout")
-set(PCRIO_DIR "${CMAKE_SOURCE_DIR}/../pcrio" CACHE PATH "Path to the pcrio checkout")
+set(GENIEUTILS_DIR "${CMAKE_SOURCE_DIR}/extern/genieutils" CACHE PATH "Path to the genieutils checkout")
+set(PCRIO_DIR "${CMAKE_SOURCE_DIR}/extern/pcrio" CACHE PATH "Path to the pcrio checkout")
 
 if(NOT EXISTS "${GENIEUTILS_DIR}/include/genie/dat/DatFile.h")
-  message(FATAL_ERROR "genieutils not found at GENIEUTILS_DIR=${GENIEUTILS_DIR}")
+  message(FATAL_ERROR "genieutils not found at GENIEUTILS_DIR=${GENIEUTILS_DIR} "
+    "(run: git submodule update --init)")
 endif()
 if(NOT EXISTS "${PCRIO_DIR}/pcrio.h")
-  message(FATAL_ERROR "pcrio not found at PCRIO_DIR=${PCRIO_DIR}")
+  message(FATAL_ERROR "pcrio not found at PCRIO_DIR=${PCRIO_DIR} "
+    "(run: git submodule update --init)")
 endif()
 
 find_package(Boost CONFIG REQUIRED COMPONENTS iostreams interprocess)

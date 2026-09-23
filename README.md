@@ -12,7 +12,8 @@ by their in-game names ("82 - Castle"). File > Open Data File opens a loose
 ## Layout
 
 ```
-cmake/Genieutils.cmake   builds genieutils + pcrio from sibling checkouts
+cmake/Genieutils.cmake   builds genieutils + pcrio from extern/
+extern/                  genieutils, pcrio (git submodules)
 src/core/                Session, VersionProfile, Config (no widgets)
 src/model/               field descriptors, Qt item models (no widgets)
 src/ui/                  Qt Widgets front end
@@ -46,15 +47,10 @@ separately, in `QSettings`.
 ## Building (Windows)
 
 Requirements: Visual Studio 2026 (MSVC), CMake ≥ 3.25, vcpkg with `VCPKG_ROOT`
-set. genieutils and pcrio must be checked out next to this repo:
-
-```
-D:\Source\NewAge
-D:\Source\genieutils
-D:\Source\pcrio
-```
-
-(or pass `-DGENIEUTILS_DIR=... -DPCRIO_DIR=...`).
+set. genieutils ([fork](https://github.com/kebugcheckex/genieutils) of
+Tapsa/genieutils) and pcrio are submodules under `extern/`; clone with
+`--recursive`, or run `git submodule update --init` after cloning. To build
+against another checkout, pass `-DGENIEUTILS_DIR=... -DPCRIO_DIR=...`.
 
 ```sh
 cmake --preset msvc              # first run builds Qt etc. through vcpkg

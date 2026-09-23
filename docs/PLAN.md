@@ -75,12 +75,12 @@ AGE logic worth porting as-is:
   `--x-buildtrees-root=<real path>` there, because Scoop's `buildtrees` is a
   junction and Qt refuses to build under a symlinked path (see README).
 - **genieutils integration:** `cmake/Genieutils.cmake` compiles genieutils and
-  pcrio from the sibling checkouts (`GENIEUTILS_DIR`, `PCRIO_DIR`, defaulting to
-  `../genieutils` and `../pcrio`) into a proper `genie::genieutils` static
-  target. We don't `add_subdirectory()` upstream's CMakeLists because it uses
-  directory-wide include paths and GCC-only flags. We use the working trees, not
-  submodules, because genieutils has uncommitted changes in use (SWGB fields).
-  Switch to submodules once those are committed.
+  pcrio from the `extern/` submodules (`GENIEUTILS_DIR`, `PCRIO_DIR` override
+  them) into a proper `genie::genieutils` static target. We don't
+  `add_subdirectory()` upstream's CMakeLists because it uses directory-wide
+  include paths and GCC-only flags. genieutils comes from our fork
+  (kebugcheckex/genieutils), which adds an iconv signature fix for vcpkg's
+  libiconv on top of Tapsa/genieutils; pcrio is upstream Tapsa/pcrio.
 - **Layout:**
 
   ```
