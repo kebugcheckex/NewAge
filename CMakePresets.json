@@ -31,8 +31,8 @@
     }
   ],
   "buildPresets": [
-    { "name": "msvc-debug", "configurePreset": "msvc", "configuration": "Debug" },
-    { "name": "msvc-release", "configurePreset": "msvc", "configuration": "Release" },
+    { "name": "msvc-debug", "configurePreset": "msvc", "configuration": "Debug", "nativeToolOptions": ["/m"] },
+    { "name": "msvc-release", "configurePreset": "msvc", "configuration": "Release", "nativeToolOptions": ["/m"] },
     { "name": "ninja-debug", "configurePreset": "ninja", "configuration": "Debug" },
     { "name": "ninja-release", "configurePreset": "ninja", "configuration": "Release" }
   ],

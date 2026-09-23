@@ -8,6 +8,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(NEWAGE_BUILD_TESTS "Build the test suite" ON)
 
+# Visual Studio builds a project's sources one at a time unless cl gets /MP
+# (Ninja already runs one compiler per core).
+if(CMAKE_GENERATOR MATCHES "Visual Studio")
+  add_compile_options(/MP)
+endif()
+
 include(cmake/Genieutils.cmake)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
