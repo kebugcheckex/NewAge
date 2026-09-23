@@ -3,6 +3,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QInputDialog>
@@ -13,9 +14,12 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 
+#include "core/Config.h"
+#include "core/GameInstall.h"
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "ui/OptionsDialog.h"
 #include "ui/UnitBrowser.h"
 
 namespace newage {
@@ -24,16 +28,22 @@ namespace {
 
 const auto kLastVersionKey = QStringLiteral("open/lastVersion");
 const auto kLastDirKey = QStringLiteral("open/lastDir");
+const auto kLastGameDirKey = QStringLiteral("open/lastGameDir");
+// .dat file name of the data set last opened from a game folder.
+const auto kLastDatasetKey = QStringLiteral("open/lastDataset");
+// Language folder used for HD / DE. Hard-coded until there's a setting.
+const auto kLocale = QStringLiteral("en");
 const auto kDatFilter = QStringLiteral("Genie data files (*.dat);;All files (*)");
 
 } // namespace
 
-MainWindow::MainWindow(QWidget *parent)
+MainWindow::MainWindow(Config *config, QWidget *parent)
     : QMainWindow(parent),
+      config_(config),
       session_(new Session(this)),
       pages_(new QStackedWidget(this)),
-      placeholder_(new QLabel(tr("No data open. Use File > Open."), this)),
-      unitBrowser_(new UnitBrowser(session_, this)),
+      placeholder_(new QLabel(tr("No data open. Use File > Open Game Folder."), this)),
+      unitBrowser_(new UnitBrowser(session_, config_, this)),
       fileInfo_(new QLabel(this))
 {
     placeholder_->setAlignment(Qt::AlignCenter);
@@ -56,8 +66,9 @@ void MainWindow::createActions()
 {
     QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
 
-    QAction *openAction = fileMenu->addAction(tr("&Open..."), this, &MainWindow::openFile);
+    QAction *openAction = fileMenu->addAction(tr("&Open Game Folder..."), this, &MainWindow::openGameFolder);
     openAction->setShortcut(QKeySequence::Open);
+    fileMenu->addAction(tr("Open &Data File..."), this, &MainWindow::openDataFile);
 
     saveAsAction_ = fileMenu->addAction(tr("Save &As..."), this, &MainWindow::saveFileAs);
     saveAsAction_->setShortcut(QKeySequence::SaveAs);
@@ -65,9 +76,78 @@ void MainWindow::createActions()
     fileMenu->addSeparator();
     QAction *quitAction = fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
     quitAction->setShortcut(QKeySequence::Quit);
+
+    QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
+    QAction *optionsAction = toolsMenu->addAction(tr("&Options..."), this, &MainWindow::showOptions);
+    optionsAction->setShortcut(QKeySequence::Preferences);
+    optionsAction->setMenuRole(QAction::PreferencesRole);
 }
 
-void MainWindow::openFile()
+void MainWindow::openGameFolder()
+{
+    if (!confirmDiscardChanges())
+        return;
+
+    QSettings settings;
+    const QString dir = QFileDialog::getExistingDirectory(this, tr("Open game folder"),
+                                                          settings.value(kLastGameDirKey).toString());
+    if (dir.isEmpty())
+        return;
+
+    const QList<GameDataset> datasets = detectInstall(dir, kLocale);
+    if (datasets.isEmpty())
+    {
+        QMessageBox::critical(this, tr("No game data found"),
+                              tr("%1 doesn't look like a game folder. None of these files are in it:\n\n%2\n\n"
+                                 "To open a .dat file from somewhere else, use File > Open Data File.")
+                                  .arg(QDir::toNativeSeparators(dir), knownDatPaths().join(QLatin1Char('\n'))));
+        return;
+    }
+    settings.setValue(kLastGameDirKey, dir);
+
+    int chosen = 0;
+    if (datasets.size() > 1)
+    {
+        QStringList titles;
+        const QString lastDat = settings.value(kLastDatasetKey).toString();
+        for (const GameDataset &dataset : datasets)
+        {
+            if (QFileInfo(dataset.datPath).fileName() == lastDat)
+                chosen = titles.size();
+            titles << dataset.title;
+        }
+        bool ok = false;
+        const QString title = QInputDialog::getItem(this, tr("Open game folder"),
+                                                    tr("This folder holds several data files. Open:"), titles,
+                                                    chosen, false, &ok);
+        if (!ok)
+            return;
+        chosen = titles.indexOf(title);
+    }
+    const GameDataset &dataset = datasets.at(chosen);
+    settings.setValue(kLastDatasetKey, QFileInfo(dataset.datPath).fileName());
+
+    statusBar()->showMessage(tr("Loading %1...").arg(QDir::toNativeSeparators(dataset.datPath)));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString error;
+    QStringList warnings;
+    const bool loaded = session_->open(dataset, &error, &warnings);
+    QApplication::restoreOverrideCursor();
+
+    if (!loaded)
+    {
+        statusBar()->clearMessage();
+        QMessageBox::critical(this, tr("Open failed"), error);
+        return;
+    }
+    statusBar()->showMessage(tr("Loaded %1").arg(dataset.title), 5000);
+    if (dataset.languageFiles.isEmpty())
+        warnings << tr("No language files were found, so units show their internal names.");
+    if (!warnings.isEmpty())
+        QMessageBox::warning(this, tr("Language files"), warnings.join(QLatin1Char('\n')));
+}
+
+void MainWindow::openDataFile()
 {
     if (!confirmDiscardChanges())
         return;
@@ -78,7 +158,8 @@ void MainWindow::openFile()
     if (path.isEmpty())
         return;
 
-    // Temporary version picker; replaced by a proper open dialog / profiles later.
+    // A loose .dat file: the user picks the version, and there are no language
+    // strings, so units show their internal names.
     QStringList names;
     int current = 0;
     const QString lastKey = settings.value(kLastVersionKey).toString();
@@ -136,6 +217,18 @@ void MainWindow::saveFileAs()
     refresh();
 }
 
+void MainWindow::showOptions()
+{
+    OptionsDialog dialog(config_, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    QString error;
+    if (!config_->save(&error))
+        QMessageBox::warning(this, tr("Options not saved"),
+                             tr("%1\n\nThe new options apply until NewAge is closed.").arg(error));
+}
+
 bool MainWindow::confirmDiscardChanges()
 {
     if (!session_->isModified())
@@ -173,10 +266,13 @@ void MainWindow::refresh()
     pages_->setCurrentWidget(unitBrowser_);
 
     const genie::DatFile &dat = *session_->dat();
-    fileInfo_->setText(tr("%1 | %2 civs | %3 units")
+    const int languageFiles = static_cast<int>(session_->names().files().size());
+    fileInfo_->setText(tr("%1 | %2 civs | %3 units | %4")
                            .arg(QString::fromLatin1(dat.FileVersion.c_str()))
                            .arg(dat.Civs.size())
-                           .arg(dat.Civs.front().Units.size()));
+                           .arg(dat.Civs.front().Units.size())
+                           .arg(languageFiles ? tr("%n language file(s)", nullptr, languageFiles)
+                                              : tr("no language files")));
 }
 
 } // namespace newage

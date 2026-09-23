@@ -4,17 +4,44 @@ A Qt 6 editor for Genie engine game data (Age of Empires, Age of Empires II,
 Star Wars: Galactic Battlegrounds), replacing a subset of
 Advanced Genie Editor. See [docs/PLAN.md](docs/PLAN.md).
 
+Use File > Open Game Folder and pick the game's install directory. NewAge
+finds the `.dat` and the English language files itself, and units are listed
+by their in-game names ("82 - Castle"). File > Open Data File opens a loose
+`.dat` without strings.
+
 ## Layout
 
 ```
 cmake/Genieutils.cmake   builds genieutils + pcrio from sibling checkouts
-src/core/                Session, VersionProfile (no widgets)
+src/core/                Session, VersionProfile, Config (no widgets)
 src/model/               field descriptors, Qt item models (no widgets)
 src/ui/                  Qt Widgets front end
 src/app/                 main()
 tests/                   Qt Test suite
 docs/                    plan and design notes
 ```
+
+## Options
+
+Tools > Options edits user preferences, saved as JSON in
+`%LOCALAPPDATA%\NewAge\NewAge\config.json`:
+
+```json
+{
+    "unitList": {
+        "hideEmpty": false
+    }
+}
+```
+
+| Entry                | Default | Meaning                                     |
+|----------------------|---------|---------------------------------------------|
+| `unitList.hideEmpty` | `false` | Leave empty unit slots out of the unit list |
+
+Missing or mistyped entries use their defaults, and unknown entries are kept
+when the file is saved. The file is only written when you press OK in the
+Options dialog. Session state such as the last opened folder is kept
+separately, in `QSettings`.
 
 ## Building (Windows)
 
@@ -61,6 +88,14 @@ ctest --preset msvc-debug
 ```
 
 Version keys are listed in `src/core/VersionProfile.cpp`.
+
+To check folder detection and language strings against a real game install
+(AoK HD, AoE2 DE, or a DLL-based game):
+
+```sh
+set NEWAGE_TEST_GAME_DIR=E:\SteamLibrary\steamapps\common\Age2HD
+ctest --preset msvc-debug -R gamedata
+```
 
 `ui_test` saves a screenshot of the unit browser if `NEWAGE_UI_SCREENSHOT` is
 set to a `.png` path.

@@ -1,13 +1,17 @@
+#include <QCheckBox>
 #include <QComboBox>
 #include <QFile>
 #include <QLineEdit>
 #include <QListView>
+#include <QTemporaryDir>
 #include <QTest>
 #include <QTreeView>
 
+#include "core/Config.h"
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "ui/OptionsDialog.h"
 #include "ui/UnitBrowser.h"
 
 using namespace newage;
@@ -15,6 +19,17 @@ using namespace newage;
 namespace {
 
 const QString kTcDat = QStringLiteral(NEWAGE_SAMPLE_DATA_DIR "/empires2_x1_p1.dat");
+
+bool listsEmptySlots(const QListView *list)
+{
+    const QAbstractItemModel *model = list->model();
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        if (model->index(row, 0).data().toString().endsWith(QStringLiteral("(empty)")))
+            return true;
+    }
+    return false;
+}
 
 // Displayed value of field `name` in the field view, or a null string.
 QString shownValue(const QTreeView *view, const QString &name)
@@ -55,6 +70,11 @@ class UnitBrowserTest : public QObject
 
 private slots:
     void browseSampleUnits();
+    void hideEmptyUnits();
+    void optionsDialogEditsConfig();
+
+private:
+    QTemporaryDir dir_;
 };
 
 void UnitBrowserTest::browseSampleUnits()
@@ -63,7 +83,8 @@ void UnitBrowserTest::browseSampleUnits()
         QSKIP("Sample data/empires2_x1_p1.dat not present.");
 
     Session session;
-    UnitBrowser browser(&session);
+    Config config(dir_.filePath(QStringLiteral("browse.json")));
+    UnitBrowser browser(&session, &config);
     auto *civs = browser.findChild<QComboBox *>();
     auto *filter = browser.findChild<QLineEdit *>();
     auto *units = browser.findChild<QListView *>();
@@ -107,6 +128,53 @@ void UnitBrowserTest::browseSampleUnits()
     QCOMPARE(civs->count(), 0);
     QCOMPARE(units->model()->rowCount(), 0);
     QCOMPARE(fields->model()->rowCount(), 0);
+}
+
+void UnitBrowserTest::hideEmptyUnits()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+
+    Session session;
+    Config config(dir_.filePath(QStringLiteral("hide.json")));
+    UnitBrowser browser(&session, &config);
+    auto *units = browser.findChild<QListView *>();
+    QString error;
+    QVERIFY2(session.open(kTcDat, *findVersionProfile(QStringLiteral("tc")), &error), qPrintable(error));
+    QVERIFY(listsEmptySlots(units));
+    const int allRows = units->model()->rowCount();
+
+    selectUnit(units, 4);
+    config.setHideEmptyUnits(true);
+    QVERIFY(!listsEmptySlots(units));
+    QVERIFY(units->model()->rowCount() < allRows);
+    // The selection survives the filter change.
+    QCOMPARE(units->currentIndex().data().toString(), QStringLiteral("4 - ARCHR"));
+
+    config.setHideEmptyUnits(false);
+    QCOMPARE(units->model()->rowCount(), allRows);
+}
+
+void UnitBrowserTest::optionsDialogEditsConfig()
+{
+    Config config(dir_.filePath(QStringLiteral("dialog.json")));
+    {
+        OptionsDialog dialog(&config);
+        auto *hideEmpty = dialog.findChild<QCheckBox *>();
+        QVERIFY(hideEmpty);
+        QVERIFY(!hideEmpty->isChecked());
+        hideEmpty->setChecked(true);
+        dialog.reject();
+        QCOMPARE(config.hideEmptyUnits(), false);
+    }
+    {
+        OptionsDialog dialog(&config);
+        dialog.findChild<QCheckBox *>()->setChecked(true);
+        dialog.accept();
+        QCOMPARE(config.hideEmptyUnits(), true);
+    }
+    OptionsDialog dialog(&config);
+    QVERIFY(dialog.findChild<QCheckBox *>()->isChecked());
 }
 
 QTEST_MAIN(UnitBrowserTest)

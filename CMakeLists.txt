@@ -15,6 +15,12 @@ qt_standard_project_setup()
 
 # --- core: data/session logic, no widgets ------------------------------------
 add_library(newage_core STATIC
+  src/core/Config.cpp
+  src/core/Config.h
+  src/core/GameInstall.cpp
+  src/core/GameInstall.h
+  src/core/NameProvider.cpp
+  src/core/NameProvider.h
   src/core/Session.cpp
   src/core/Session.h
   src/core/VersionProfile.cpp
@@ -30,6 +36,8 @@ add_library(newage_model STATIC
   src/model/FieldTreeModel.h
   src/model/UnitFields.cpp
   src/model/UnitFields.h
+  src/model/UnitFilterModel.cpp
+  src/model/UnitFilterModel.h
   src/model/UnitListModel.cpp
   src/model/UnitListModel.h
 )
@@ -62,6 +70,8 @@ endfunction()
 add_library(newage_ui STATIC
   src/ui/MainWindow.cpp
   src/ui/MainWindow.h
+  src/ui/OptionsDialog.cpp
+  src/ui/OptionsDialog.h
   src/ui/UnitBrowser.cpp
   src/ui/UnitBrowser.h
 )

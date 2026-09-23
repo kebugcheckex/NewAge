@@ -4,24 +4,26 @@
 #include <QHeaderView>
 #include <QLineEdit>
 #include <QListView>
-#include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QTreeView>
 #include <QVBoxLayout>
 
+#include "core/Config.h"
 #include "core/Session.h"
 #include "genie/dat/DatFile.h"
 #include "model/FieldTreeModel.h"
 #include "model/UnitFields.h"
+#include "model/UnitFilterModel.h"
 #include "model/UnitListModel.h"
 
 namespace newage {
 
-UnitBrowser::UnitBrowser(Session *session, QWidget *parent)
+UnitBrowser::UnitBrowser(Session *session, Config *config, QWidget *parent)
     : QWidget(parent),
       session_(session),
+      config_(config),
       unitModel_(new UnitListModel(session, this)),
-      unitFilter_(new QSortFilterProxyModel(this)),
+      unitFilter_(new UnitFilterModel(this)),
       fieldModel_(new FieldTreeModel(this)),
       civCombo_(new QComboBox(this)),
       filterEdit_(new QLineEdit(this)),
@@ -29,7 +31,6 @@ UnitBrowser::UnitBrowser(Session *session, QWidget *parent)
       fieldView_(new QTreeView(this))
 {
     unitFilter_->setSourceModel(unitModel_);
-    unitFilter_->setFilterCaseSensitivity(Qt::CaseInsensitive);
 
     filterEdit_->setPlaceholderText(tr("Filter units"));
     filterEdit_->setClearButtonEnabled(true);
@@ -63,8 +64,9 @@ UnitBrowser::UnitBrowser(Session *session, QWidget *parent)
     connect(session_, &Session::opened, this, &UnitBrowser::reloadCivs);
     connect(session_, &Session::closed, this, &UnitBrowser::reloadCivs);
     connect(civCombo_, &QComboBox::currentIndexChanged, this, &UnitBrowser::showCiv);
-    connect(filterEdit_, &QLineEdit::textChanged, unitFilter_, &QSortFilterProxyModel::setFilterFixedString);
+    connect(filterEdit_, &QLineEdit::textChanged, unitFilter_, &UnitFilterModel::setFilterFixedString);
     connect(unitView_->selectionModel(), &QItemSelectionModel::currentChanged, this, &UnitBrowser::showSelectedUnit);
+    connect(config_, &Config::changed, this, &UnitBrowser::applyConfig);
     connect(fieldModel_, &QAbstractItemModel::modelReset, this, [this] {
         // Group headings span both columns so they read as section titles.
         for (int row = 0; row < fieldModel_->rowCount(); ++row)
@@ -72,6 +74,7 @@ UnitBrowser::UnitBrowser(Session *session, QWidget *parent)
         fieldView_->expandAll();
     });
 
+    applyConfig();
     reloadCivs();
 }
 
@@ -103,7 +106,7 @@ void UnitBrowser::showSelectedUnit()
 {
     const genie::Unit *unit = unitModel_->unit(selectedUnit());
     if (unit)
-        fieldModel_->setObject(unitFields(), *unit);
+        fieldModel_->setObject(unitFields(), *unit, &session_->names());
     else
         fieldModel_->clear();
 }
@@ -121,6 +124,13 @@ void UnitBrowser::selectUnit(int unit)
         return;
     unitView_->setCurrentIndex(index);
     unitView_->scrollTo(index, QAbstractItemView::PositionAtCenter);
+}
+
+void UnitBrowser::applyConfig()
+{
+    unitFilter_->setHideEmpty(config_->hideEmptyUnits());
+    if (unitView_->currentIndex().isValid())
+        unitView_->scrollTo(unitView_->currentIndex());
 }
 
 } // namespace newage

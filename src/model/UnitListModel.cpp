@@ -35,14 +35,42 @@ int UnitListModel::rowCount(const QModelIndex &parent) const
 
 QVariant UnitListModel::data(const QModelIndex &index, int role) const
 {
-    if (!index.isValid() || role != Qt::DisplayRole)
+    if (!index.isValid())
         return {};
 
     const int row = index.row();
+    switch (role)
+    {
+    case HasUnitRole:
+        return hasUnit(row);
+    case Qt::DisplayRole:
+        return QStringLiteral("%1 - %2").arg(row).arg(unitName(row));
+    case Qt::ToolTipRole:
+        if (const genie::Unit *u = unit(row))
+            return QString::fromLatin1(u->Name);
+        return {};
+    case SearchTextRole:
+    {
+        QString text = QStringLiteral("%1 - %2").arg(row).arg(unitName(row));
+        if (const genie::Unit *u = unit(row))
+            text += QLatin1Char(' ') + QString::fromLatin1(u->Name);
+        return text;
+    }
+    default:
+        return {};
+    }
+}
+
+QString UnitListModel::unitName(int row) const
+{
     const genie::Unit *u = unit(row);
     if (!u)
-        return tr("%1 - (empty)").arg(row);
-    return QStringLiteral("%1 - %2").arg(row).arg(QString::fromLatin1(u->Name));
+        return tr("(empty)");
+    if (const QString name = session_->names().text(u->LanguageDLLName); !name.isEmpty())
+        return name;
+    if (!u->Name.empty())
+        return QString::fromLatin1(u->Name);
+    return tr("(unnamed)");
 }
 
 Qt::ItemFlags UnitListModel::flags(const QModelIndex &index) const

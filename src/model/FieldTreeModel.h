@@ -4,6 +4,7 @@
 #include <QList>
 #include <QString>
 
+#include "core/NameProvider.h"
 #include "model/FieldDesc.h"
 
 namespace newage {
@@ -24,20 +25,27 @@ public:
         QString name;
         QString group;
         QVariant value;
+        // Shown after the value, e.g. the language string of a string ID.
+        QString note = {};
     };
 
     explicit FieldTreeModel(QObject *parent = nullptr);
 
     // Reads every field of `fields` that applies to `object`. The model keeps
     // the values, not the object, so it can't be left pointing at freed data.
+    // String ID fields are looked up in `names` (if given).
     template <typename T>
-    void setObject(const QList<FieldDesc<T>> &fields, const T &object)
+    void setObject(const QList<FieldDesc<T>> &fields, const T &object, const NameProvider *names = nullptr)
     {
         QList<Row> rows;
         for (const FieldDesc<T> &field : fields)
         {
-            if (!field.applies || field.applies(object))
-                rows.append({field.name, field.group, field.get(object)});
+            if (field.applies && !field.applies(object))
+                continue;
+            Row row{field.name, field.group, field.get(object)};
+            if (field.isStringId && names)
+                row.note = names->text(row.value.toInt());
+            rows.append(row);
         }
         setRows(rows);
     }

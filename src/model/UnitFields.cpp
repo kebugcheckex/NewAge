@@ -57,8 +57,8 @@ const QList<FieldDesc<Unit>> &unitFields()
         {"Internal name", general, {}, [](const Unit &u) { return QVariant(QString::fromLatin1(u.Name)); }},
         // genieutils widens the 16-bit variants into these on load, so the
         // 32-bit members are valid for every game version.
-        {"Language name", general, {}, [](const Unit &u) { return intValue(u.LanguageDLLName); }},
-        {"Language creation", general, {}, [](const Unit &u) { return intValue(u.LanguageDLLCreation); }},
+        {"Language name", general, {}, [](const Unit &u) { return intValue(u.LanguageDLLName); }, true},
+        {"Language creation", general, {}, [](const Unit &u) { return intValue(u.LanguageDLLCreation); }, true},
 
         {"Hit points", stats, {}, [](const Unit &u) { return intValue(u.HitPoints); }},
         {"Line of sight", stats, {}, [](const Unit &u) { return QVariant(u.LineOfSight); }},

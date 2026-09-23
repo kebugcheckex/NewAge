@@ -18,7 +18,7 @@ dependency and already handles all file formats:
 | Area       | genieutils API                                    |
 |------------|---------------------------------------------------|
 | Game data  | `genie::DatFile` (civs, units, techs, graphics...) |
-| Strings    | `genie::LangFile` (language DLLs, via pcrio + iconv) |
+| Strings    | `genie::LangFile` (language DLLs, via pcrio + iconv). HD/DE key-value `.txt` files are not covered; NewAge parses those itself |
 | Sprites    | `DrsFile`, `SlpFile`, `SmpFile`, `SmxFile`, `PalFile` |
 
 NewAge links it unchanged.
@@ -41,6 +41,11 @@ repeating (paths relative to the AGE repo):
 - **One mega-dialog for settings.** Game version, paths and language files are
   all chosen in a single dialog and persisted through ad-hoc `wxConfig` ini
   files (`AGE_Frame/Other.cpp:101-330`).
+- **Every file picked by hand.** The user enters the `.dat` and up to three
+  language files as separate paths, each with its own checkbox. The
+  per-game "default" buttons (`OpenSaveDialog.cpp:168-330`) only fill in
+  guessed paths under `<drive>:\Program Files`. NewAge opens a game
+  installation folder instead (see M2b).
 - **Legacy platform code.** A Windows-only `LoadStringA` path for 32-bit builds,
   SFML for sound, custom combo-box popups.
 
@@ -52,8 +57,9 @@ AGE logic worth porting as-is:
   pre-C15 DE2 data copies `UnitHeaders[].TaskList` into each unit
   (`AGE_Frame/Other.cpp:1287-1317`). **Not ported yet.** `Session::saveAs`
   currently writes back the loaded format.
-- DE2 key/value string file parsing: `LoadTXT` / `TranslatedText`
-  (`AGE_Frame/Other.cpp:2067-2118`).
+- Language string lookup: `LoadTXT` / `TranslatedText`
+  (`AGE_Frame/Other.cpp:2067-2118`), and the unit list label rule in
+  `GetUnitName` (`AGE_Frame/Units.cpp:8-73`). Details and known bugs in M3.
 - Palette / SLP loading and LRU sprite cache: `Loaders.cpp`.
 
 ## 2. Project setup (done in the scaffold)
@@ -79,15 +85,16 @@ AGE logic worth porting as-is:
 
   ```
   src/app/     main.cpp
-  src/core/    Session, VersionProfile            (QtCore only, no widgets)
+  src/core/    Session, VersionProfile, Config    (QtCore only, no widgets)
   src/model/   FieldDesc, descriptor tables, Qt item models   (QtCore only)
-  src/ui/      MainWindow, UnitBrowser; later OpenDialog, PropertyEditor
-  tests/       Qt Test: load/save round-trip, models, UnitBrowser smoke test
+  src/ui/      MainWindow, UnitBrowser, OptionsDialog; later OpenDialog, PropertyEditor
+  tests/       Qt Test: load/save round-trip, config, models, UnitBrowser smoke test
   ```
 
 - **Targets:** `genieutils` → `newage_core` → `newage_model` → `newage_ui`
   (all static) → `NewAge` (exe). Each test links the lowest layer it needs:
-  `roundtrip_test` → core, `model_test` → model, `ui_test` → ui.
+  `roundtrip_test` and `config_test` → core, `model_test` → model,
+  `ui_test` → ui.
 - **Sample data:** the gitignored `data/` folder holds
   `empires2_x1_p1.dat` (The Conquerors, `tc`) and `empires2_x2_p1.dat`
   (HD Edition, `aokhd`, file version `VER 5.7`). Tests that need them skip
@@ -99,8 +106,8 @@ AGE logic worth porting as-is:
 |----|-----------|--------|
 | M0 | Build skeleton: Qt window, genieutils linked, open a `.dat` and show counts | Done |
 | M1 | Headless load → save → compare round-trip test | Done; passes on both samples |
-| M2 | `Session` + settings + open dialog / profiles | `Session` done; open dialog is a temporary picker |
-| M3 | `NameProvider` for language strings | Planned |
+| M2 | `Session` + settings + open a game installation | Done except the recent list, locale choice and version combo (see M2b) |
+| M3 | `NameProvider` for language strings | Done for unit labels and the two unit string-ID fields |
 | M4 | Field descriptors + generic property editor | Read-only subset done (see M4a) |
 | M5 | First vertical slice: Civs → Units with undo | Read-only browser done (see M4a) |
 
@@ -137,7 +144,11 @@ A thin first cut of M4 + M5, skipping M3:
   with `Civ::UnitPointers[i] == 0` show as "(empty)" and are not selectable.
 - `UnitBrowser` (`src/ui/`): civ combo (starts on civ 1, since civ 0 is Gaia),
   filter box, unit list, field tree. Switching civ keeps the same unit
-  selected. List labels use the internal name until M3 exists.
+  selected. List labels follow the M3 label rule ("82 - Castle"). The
+  tooltip shows the internal name, and the filter matches either.
+- `UnitFilterModel` wraps the list: the text filter, plus hiding empty slots
+  (via `UnitListModel::HasUnitRole`) when the `unitList.hideEmpty` option is
+  on. Row == unit index still holds in the source model.
 - Not shown yet: list-valued data (attacks/armours, costs, damage graphics,
   tasks) and type-specific sub-structs beyond Speed.
 
@@ -145,23 +156,174 @@ A thin first cut of M4 + M5, skipping M3:
 - `newage::Session` owns the `DatFile`, the detected `GameVersion`, the path
   and the modified flag, and emits `opened` / `closed` / `modifiedChanged`.
   The UI never owns genie data directly.
+- `newage::Config` holds user preferences in a JSON file
+  (`QStandardPaths::AppConfigLocation/config.json`), one object per section.
+  Each entry is a typed getter/setter with its default in code. Missing or
+  mistyped entries read as the default, and unknown ones survive a save.
+  `changed()` fires on load and on any real change, and views re-read what
+  they use. `main()` loads it (on a bad file: warning, then defaults).
+  Tools > Options (`OptionsDialog`, one group box per section) edits it, and
+  `MainWindow` saves it on OK. First entry: `unitList.hideEmpty`. Adding an
+  entry means a getter/setter in `Config` plus a widget in `OptionsDialog`.
+  Transient state (last folder, last version) stays in `QSettings`.
 - Next steps:
-  - Add the language files to `Session`.
   - Port the save-time version upgrade (see section 1).
-  - Replace the temporary `QInputDialog` version picker with an `OpenDialog`
-    built around a **profile**: game version + `.dat` path + language paths,
-    stored in `QSettings` with a recent-profiles list.
   - Don't port AGE's drive-letter / DRS / loose-SLP path options until sprite
     preview is needed.
 
-### M3: NameProvider
-A single `QString text(int id)` over three sources:
-1. language DLLs through `genie::LangFile` (lookup order x1p1 → x1 → base, as AGE
-   does),
-2. the DE2 key/value `.txt` string file (port of `LoadTXT`),
-3. custom-name ini files.
+### M2b: Open a game installation (design change)
+AGE makes the user pick the `.dat` and each language file separately (see
+section 1). NewAge's main entry point is instead **File > Open Game Folder**:
+the user picks the installation directory and NewAge finds the files itself.
 
-List labels ("123 - Archer") and ID-reference fields all depend on it.
+- **Detection** (`newage::GameInstall`, `src/core`, no widgets):
+  `detectInstall(dir)` checks the known layouts below and returns every
+  dataset it finds. Each dataset holds a version key, a `.dat` path, the
+  language files in lookup order, and the available locales. Detection looks
+  at data and language files, not executables, so renamed executables
+  don't matter.
+- **Several datasets in one folder.** Some installs hold more than one `.dat`
+  (RoR has `data/` and `data2/`, HD has `empires2_x1_p1.dat` and
+  `empires2_x2_p1.dat`, SWGB has `genie.dat` and `genie_x1.dat`). The open
+  dialog lists them with the newest selected. With only one, it opens
+  straight away.
+- **Locale.** HD and DE keep strings under `resources/<locale>/`. The locale
+  list comes from those folder names (leaving out `_common`, `_launcher`,
+  `_packages`). The default is a new `language.locale` entry in `Config`, then
+  the system UI language if present, then `en`. The DLL-based games have
+  only one language, the one installed.
+- **Version.** The layout decides the version key (`VersionProfile`). DE and
+  HD `.dat` files also carry a version string, which genieutils checks on
+  load. If detection is ambiguous (e.g. `tc` vs `tcv`), the dialog shows a
+  version combo preset to the best guess.
+- **Recent list.** A recent entry is install folder + dataset + locale, kept
+  in `QSettings`. Reopening is one click.
+- **Fallbacks.**
+  - *File > Open Data File* stays for loose or modded `.dat` files. It asks
+    for the version and optionally a game folder to take strings from. With
+    no strings, labels show the internal name (see M3).
+  - A folder that matches no layout gives an error listing what was looked
+    for, not a guess.
+- **Mods** (DE mods live under `%USERPROFILE%\Games\Age of Empires 2
+  DE\<id>\mods`, HD under `<install>\mods`) are out of scope for now. A mod's
+  `.dat` can be opened through *Open Data File*.
+
+Known layouts. AoK HD and AoE2 DE were checked against real installs.
+The others come from AGE's default buttons (`OpenSaveDialog.cpp:168-330`)
+and must be checked before being trusted (case-insensitive: older games mix
+`data` / `Data`).
+
+| Game | `.dat` (relative to the folder) | Key | Language files, highest priority first |
+|------|--------------------------------|-----|----------------------------------------|
+| AoE | `data/empires.dat` | `aoe` | `language.dll` |
+| RoR | `data2/empires.dat` | `ror` | `languagex.dll`, `language.dll` |
+| AoE DE | `Data/empires.dat` | `aoede` | `Data/Localization/<locale>/strings.txt` |
+| AoK | `data/empires2.dat` | `aok` | `language.dll` |
+| TC | `data/empires2_x1_p1.dat` | `tc` | `language_x1_p1.dll`, `language_x1.dll`, `language.dll` |
+| AoK HD ✔ | `resources/_common/dat/empires2_x1_p1.dat` (`tc`), `…/empires2_x2_p1.dat` (`aokhd`) | | `resources/<locale>/strings/key-value/key-value-modded-strings-utf8.txt`, `key-value-strings-utf8.txt` |
+| AoE2 DE ✔ | `resources/_common/dat/empires2_x2_p1.dat` | `aoe2de` | `resources/<locale>/strings/key-value/key-value-modded-strings-utf8.txt`, then every other `*key-value*strings-utf8.txt` there (see M3) |
+| SWGB | `Data/genie.dat` | `swgb` | `language.dll` |
+| CC | `Data/genie_x1.dat` | `cc` | `language_x1.dll`, `language.dll` |
+| EF2 (mod) | `Data/genie_x2.dat` | `ef2` | `language_x2.dll`, `language_x1.dll`, `language.dll` |
+
+`Session::open` takes a dataset (`.dat` + version + language files) and loads
+the strings with the data, so the two can't get out of step.
+
+**Status (done).**
+- `src/core/GameInstall.*`: `detectInstall(dir, locale)` returns the
+  datasets newest first. Paths are matched case-insensitively. HD and DE
+  both use `resources/_common/dat/empires2_x2_p1.dat`. HD is the folder
+  that also has `empires2_x1_p1.dat`.
+- File > Open Game Folder (Ctrl+O) opens the only dataset straight away, or
+  asks which one, preselecting the last one used (`open/lastDataset` in
+  `QSettings`). If language files are missing or fail to load, NewAge warns
+  but opens the data anyway. File > Open Data File keeps the old `.dat` +
+  version picker, with no strings.
+- Checked against real installs: AoK HD (both datasets open, "Castle"
+  resolves). AoE2 DE is detected and its 13 string files load, but its
+  `VER 8.9` `.dat` doesn't load, because genieutils only reads up to
+  `VER 8.4`. That is a data-layer gap, separate from this milestone.
+- Not done yet: the locale is hard-coded to `en` (no `language.locale`
+  entry), there is no recent list, and there is no version combo for
+  ambiguous layouts. The DLL layouts are still unchecked against real files.
+
+### M3: NameProvider
+Turns string IDs from the data into text. List labels ("82 - Castle") and
+ID-reference fields all depend on it.
+
+**Where names come from.** A unit record holds no display name, only string
+IDs into the language files:
+
+| Field | Example (Castle, unit 82) |
+|-------|---------------------------|
+| `Unit::Name` | `CSTL` (internal name, what the list shows today) |
+| `Unit::LanguageDLLName` | 5142 → "Castle" |
+| `Unit::LanguageDLLCreation` | 6142 → "Build Castle" |
+| `Unit::LanguageDLLHelp` | 26142 → long tooltip text |
+
+Techs use the same scheme (`Tech::LanguageDLLName`, ...).
+
+**Label rule** (as AGE's `GetUnitName`, `AGE_Frame/Units.cpp:8-73`):
+1. The slot is empty (`UnitPointers[i] == 0`): "(empty)", as now.
+2. `text(LanguageDLLName)` is non-empty: use it.
+3. Otherwise use `Unit::Name`. If that is empty too: "(unnamed)".
+
+**Sources.** `NameProvider` is built from the dataset's language file list
+(M2b) and exposes `QString text(int id)`. The first file with a non-empty
+string wins; negative IDs return empty.
+- *Language DLLs* (AoE, RoR, AoK, TC, SWGB, CC): `genie::LangFile`, already
+  compiled into the build with pcrio and iconv. Convert to UTF-8 on load.
+- *Key-value text* (HD, DE, and AoE DE's `strings.txt`): UTF-8, one
+  `<id> "<text>"` per line, `//` comments. Port `LoadTXT`
+  (`AGE_Frame/Other.cpp:2067`) with fixes:
+  - AGE stops at the first `"` after the opening one, so escaped quotes cut
+    the string short (`3125 "Sent to \"%s\":"`; 73 such lines in DE's base
+    file). Parse `\"`, `\\` and `\n` properly.
+  - Skip lines whose key isn't a number (`IDS_OPT_ESC_MENU "..."`, about
+    3,300 in DE's base file). No data field refers to them.
+  - An empty string doesn't override a lower-priority file (AGE's `if (len)`).
+- *DE extra files.* Besides the base and modded files, DE ships
+  `key-value-paphos-strings-utf8.txt` (Chronicles, IDs 106440–428194) and
+  several campaign files. AGE loads none of them. NewAge loads every
+  `*key-value*strings-utf8.txt` in the folder. The paphos IDs don't overlap
+  the base file, so the order among the extra files doesn't matter. Only
+  "modded wins over base" does.
+
+**SWGB per-civ IDs.** For SWGB and later, AGE shifts the ID by civ before the
+lookup for Workers (class 58), Cargo Trader (unit 931), Commander (434) and
+Temple (104). The offsets come from AGE's ini (`swgbOffsets`,
+`AGE_Frame/Lists.cpp:991-997`). Port this into the label code, not into
+`NameProvider`, because it depends on the unit and civ. It can wait until
+SWGB is actually tested.
+
+**Status (done).** `src/core/NameProvider.*` implements the above, and
+`Session::names()` exposes it.
+- The unit list uses the label rule.
+- The field view marks "Language name" and "Language creation" as string IDs
+  (`FieldDesc::isStringId`) and shows them as `5142 "Castle"`, with the full
+  text in the tooltip.
+- DLL strings are looked up lazily and cached.
+- Key-value files are parsed up front. The parser also takes CRLF, a BOM, and
+  a missing closing quote (the rest of the line is used).
+- pcrio bug: `pcr_read_file` returns a half-initialised file for input that
+  isn't a PE image, and `~LangFile` then crashes in `pcr_free`.
+  `NameProvider` checks the MZ/PE signatures before handing a `.dll` to
+  pcrio.
+- Tests: `tests/GameDataTest.cpp` covers the parser (on
+  `tests/data/key-value-strings-sample.txt`), the priority order, error
+  reporting and layout detection on fake folders. `realInstall` runs against
+  a real install when `NEWAGE_TEST_GAME_DIR` is set.
+
+**Not in M3.** AGE's `AGE3NamesV0007.ini` ("custom names") only names armour
+classes, terrain tables and civ resources, which have no strings in the game
+files. It has nothing to do with unit names. Port it later with the fields
+that need it.
+
+**Testing.** No original TC language DLLs are available. Both samples in
+`data/` can use the AoK HD strings instead (HD keeps TC's string IDs). Tests
+read the install folder from `NEWAGE_TEST_GAME_DIR` and skip when it is
+unset. A parser unit test with a small checked-in key-value snippet (escaped
+quotes, `IDS_` keys, empty strings, override order) needs no game install.
 
 ### M4: Field descriptors + generic property editor
 This is the core design change. Instead of hand-wiring widgets, each entity type

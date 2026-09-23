@@ -76,7 +76,18 @@ QVariant FieldTreeModel::data(const QModelIndex &index, int role) const
 
     const Row &row = groups_.at(static_cast<int>(index.internalId() - 1)).rows.at(index.row());
     if (role == Qt::DisplayRole)
-        return index.column() == NameColumn ? row.name : displayText(row.value);
+    {
+        if (index.column() == NameColumn)
+            return row.name;
+        if (row.note.isEmpty())
+            return displayText(row.value);
+        // Keep multi-line strings on one line in the tree.
+        QString note = row.note;
+        note.replace(QLatin1Char('\n'), QLatin1Char(' '));
+        return QStringLiteral("%1 \"%2\"").arg(displayText(row.value), note);
+    }
+    if (role == Qt::ToolTipRole && index.column() == ValueColumn && !row.note.isEmpty())
+        return row.note;
     if (role == Qt::UserRole && index.column() == ValueColumn)
         return row.value;
     return {};

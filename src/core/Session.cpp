@@ -4,6 +4,7 @@
 
 #include <QFile>
 
+#include "core/GameInstall.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
 
@@ -27,7 +28,31 @@ Session::~Session() = default;
 bool Session::open(const QString &datPath, const VersionProfile &profile, QString *error)
 {
     close();
+    if (!loadDat(datPath, profile, error))
+        return false;
+    emit opened();
+    return true;
+}
 
+bool Session::open(const GameDataset &dataset, QString *error, QStringList *warnings)
+{
+    close();
+    const VersionProfile *profile = findVersionProfile(dataset.versionKey);
+    if (!profile)
+    {
+        if (error)
+            *error = QStringLiteral("Unknown game version \"%1\".").arg(dataset.versionKey);
+        return false;
+    }
+    if (!loadDat(dataset.datPath, *profile, error))
+        return false;
+    names_.load(dataset.languageFiles, warnings);
+    emit opened();
+    return true;
+}
+
+bool Session::loadDat(const QString &datPath, const VersionProfile &profile, QString *error)
+{
     auto dat = std::make_unique<genie::DatFile>();
     // Global in genieutils; 0 means "use the version's default terrain count".
     genie::Terrain::setTerrainCount(0);
@@ -58,7 +83,6 @@ bool Session::open(const QString &datPath, const VersionProfile &profile, QStrin
     gameVersion_ = dat_->getGameVersion();
     datPath_ = datPath;
     setModified(false);
-    emit opened();
     return true;
 }
 
@@ -93,6 +117,7 @@ void Session::close()
         return;
 
     dat_.reset();
+    names_.clear();
     gameVersion_ = genie::GV_None;
     datPath_.clear();
     setModified(false);

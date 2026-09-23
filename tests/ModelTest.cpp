@@ -4,11 +4,13 @@
 #include <QFile>
 #include <QTest>
 
+#include "core/GameInstall.h"
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
 #include "model/FieldTreeModel.h"
 #include "model/UnitFields.h"
+#include "model/UnitFilterModel.h"
 #include "model/UnitListModel.h"
 
 using namespace newage;
@@ -33,6 +35,21 @@ QVariant fieldValue(const FieldTreeModel &model, const QString &name)
     return {};
 }
 
+// Displayed text of field `name` in `model`, searched across all groups.
+QString fieldText(const FieldTreeModel &model, const QString &name)
+{
+    for (int g = 0; g < model.rowCount(); ++g)
+    {
+        const QModelIndex group = model.index(g, 0);
+        for (int r = 0; r < model.rowCount(group); ++r)
+        {
+            if (model.index(r, FieldTreeModel::NameColumn, group).data().toString() == name)
+                return model.index(r, FieldTreeModel::ValueColumn, group).data().toString();
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 class ModelTest : public QObject
@@ -44,6 +61,7 @@ private slots:
     void floatsDisplayShortest();
     void unitFieldsSkipSpeedBelowType20();
     void sampleUnitValues();
+    void labelsUseLanguageNames();
     void wrongVersionFailsToOpen();
 
 private:
@@ -132,9 +150,66 @@ void ModelTest::sampleUnitValues()
     const int emptyRow = static_cast<int>(empty - pointers.begin());
     QVERIFY(!units.unit(emptyRow));
     QVERIFY(!(units.flags(units.index(emptyRow)) & Qt::ItemIsSelectable));
+    QCOMPARE(units.index(emptyRow).data(UnitListModel::HasUnitRole).toBool(), false);
+    QCOMPARE(units.index(4).data(UnitListModel::HasUnitRole).toBool(), true);
+
+    // The filter can hide them, combined with the text filter.
+    UnitFilterModel filter;
+    QAbstractItemModelTester filterTester(&filter, QAbstractItemModelTester::FailureReportingMode::QtTest);
+    filter.setSourceModel(&units);
+    QCOMPARE(filter.rowCount(), units.rowCount());
+    QVERIFY(filter.mapFromSource(units.index(emptyRow)).isValid());
+    filter.setHideEmpty(true);
+    QCOMPARE(filter.rowCount(), static_cast<int>(pointers.size() - std::count(pointers.begin(), pointers.end(), 0)));
+    QVERIFY(!filter.mapFromSource(units.index(emptyRow)).isValid());
+    QVERIFY(filter.mapFromSource(units.index(4)).isValid());
+    filter.setFilterFixedString(QStringLiteral("(empty)"));
+    QCOMPARE(filter.rowCount(), 0);
+    filter.setHideEmpty(false);
+    QVERIFY(filter.rowCount() > 0);
 
     session.close();
     QCOMPARE(units.rowCount(), 0);
+}
+
+void ModelTest::labelsUseLanguageNames()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+
+    // The TC sample with the checked-in strings snippet as its language file.
+    Session session;
+    QString error;
+    const GameDataset dataset{QStringLiteral("sample"), QStringLiteral("tc"), kTcDat,
+                              {QStringLiteral(NEWAGE_TEST_DATA_DIR "/key-value-strings-sample.txt")}};
+    QVERIFY2(session.open(dataset, &error), qPrintable(error));
+
+    UnitListModel units(&session);
+    units.setCiv(1);
+    QCOMPARE(units.index(82).data().toString(), QStringLiteral("82 - Castle"));
+    QCOMPARE(units.index(4).data().toString(), QStringLiteral("4 - Archer"));
+    QCOMPARE(units.index(82).data(Qt::ToolTipRole).toString(), QStringLiteral("CSTL"));
+    // No string for this ID in the snippet: falls back to the internal name.
+    const genie::Unit *villager = units.unit(83);
+    QVERIFY(villager && session.names().text(villager->LanguageDLLName).isEmpty());
+    QCOMPARE(units.index(83).data().toString(), QStringLiteral("83 - %1").arg(QString::fromLatin1(villager->Name)));
+
+    // The text filter matches the language name and the internal name.
+    UnitFilterModel filter;
+    filter.setSourceModel(&units);
+    filter.setFilterFixedString(QStringLiteral("cstl"));
+    QVERIFY(filter.mapFromSource(units.index(82)).isValid());
+    filter.setFilterFixedString(QStringLiteral("castle"));
+    QVERIFY(filter.mapFromSource(units.index(82)).isValid());
+    QVERIFY(!filter.mapFromSource(units.index(4)).isValid());
+
+    // String ID fields show their text; the raw value is unchanged.
+    FieldTreeModel fields;
+    fields.setObject(unitFields(), *units.unit(82), &session.names());
+    QCOMPARE(fieldValue(fields, QStringLiteral("Language name")).toInt(), 5142);
+    QCOMPARE(fieldText(fields, QStringLiteral("Language name")), QStringLiteral("5142 \"Castle\""));
+    QCOMPARE(fieldText(fields, QStringLiteral("Language creation")), QStringLiteral("6142 \"Build Castle\""));
+    QCOMPARE(fieldText(fields, QStringLiteral("Hit points")), QStringLiteral("4800"));
 }
 
 void ModelTest::wrongVersionFailsToOpen()

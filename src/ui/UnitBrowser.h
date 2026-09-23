@@ -5,23 +5,24 @@
 class QComboBox;
 class QLineEdit;
 class QListView;
-class QSortFilterProxyModel;
 class QTreeView;
 
 namespace newage {
 
+class Config;
 class FieldTreeModel;
 class Session;
+class UnitFilterModel;
 class UnitListModel;
 
 // Civ picker + filterable unit list on the left, the selected unit's fields on
-// the right. Read-only for now.
+// the right. Read-only for now. Follows the unit list entries of `config`.
 class UnitBrowser : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit UnitBrowser(Session *session, QWidget *parent = nullptr);
+    UnitBrowser(Session *session, Config *config, QWidget *parent = nullptr);
 
 private:
     void reloadCivs();
@@ -30,10 +31,12 @@ private:
     // Unit index (row in UnitListModel) of the selection, or -1.
     int selectedUnit() const;
     void selectUnit(int unit);
+    void applyConfig();
 
     Session *session_;
+    Config *config_;
     UnitListModel *unitModel_;
-    QSortFilterProxyModel *unitFilter_;
+    UnitFilterModel *unitFilter_;
     FieldTreeModel *fieldModel_;
 
     QComboBox *civCombo_;

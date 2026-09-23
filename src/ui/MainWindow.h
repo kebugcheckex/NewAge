@@ -7,6 +7,7 @@ class QStackedWidget;
 
 namespace newage {
 
+class Config;
 class Session;
 class UnitBrowser;
 
@@ -15,19 +16,22 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(Config *config, QWidget *parent = nullptr);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
     void createActions();
-    void openFile();
+    void openGameFolder();
+    void openDataFile();
     void saveFileAs();
+    void showOptions();
     // Returns false if the user cancelled.
     bool confirmDiscardChanges();
     void refresh();
 
+    Config *config_;
     Session *session_;
     QStackedWidget *pages_;
     QLabel *placeholder_;

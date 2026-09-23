@@ -21,6 +21,8 @@ struct FieldDesc
     // for Type >= 20. Empty means always.
     std::function<bool(const T &)> applies;
     std::function<QVariant(const T &)> get;
+    // The value is a language string ID; views show the string next to it.
+    bool isStringId = false;
 };
 
 } // namespace newage
