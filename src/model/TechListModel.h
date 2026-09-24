@@ -36,7 +36,7 @@ public:
     Availability availability(int row) const;
 
     QString name(int row) const override;
-    void showFields(int row, FieldTreeModel &fields) const override;
+    void showFields(int row, FieldTreeModel &fields) override;
 
     int rowCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
@@ -47,8 +47,8 @@ protected:
     QString internalName(int row) const override;
 
 private:
-    // Per tech, for civ(); the data is read-only, so it is worked out once
-    // per civ switch.
+    // Per tech, for civ(). None of the editable fields affect it, so it is
+    // worked out once per civ switch.
     QList<Availability> availability_;
 };
 

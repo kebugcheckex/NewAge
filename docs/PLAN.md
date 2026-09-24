@@ -108,8 +108,8 @@ AGE logic worth porting as-is:
 | M1 | Headless load → save → compare round-trip test | Done; passes on both samples |
 | M2 | `Session` + settings + open a game installation | Done except the recent list, locale choice and version combo (see M2b) |
 | M3 | `NameProvider` for language strings | Done for unit labels and the two unit string-ID fields |
-| M4 | Field descriptors + generic property editor | Read-only subset done (see M4a, M4b) |
-| M5 | First vertical slice: Civs → Units with undo | Read-only unit and tech browsers done (see M4a, M4b) |
+| M4 | Field descriptors + generic property editor | Subset done: browsing (M4a, M4b), a few editable number fields (M4c) |
+| M5 | First vertical slice: Civs → Units with undo | Unit and tech browsers with editing and saving; no undo yet (see M4c) |
 
 ### M0: Build skeleton
 `MainWindow` has File → Open / Save As / Exit. Once a file is open it shows
@@ -199,6 +199,40 @@ type is a descriptor table plus a list model" (M5).
   location), which wait for `RefKind`.
 - Follow-up: tech tree effects also disable units (command type 2). The unit
   list could mark those the same way.
+
+### M4c: Editing a few number fields, and saving (done)
+- **Editable fields.** Units: Hit points, Line of sight, Speed, Costs
+  (3 × resource / amount / paid, Type >= 70) and Train time (first train
+  location, Type >= 70). Techs: Costs (3 × resource / amount / paid) and
+  Research time (first research location). Everything else, including every
+  text and string-ID field, stays read-only.
+- `FieldDesc<T>` gained `set` and an int range (`minimum` / `maximum`).
+  `numberField()` builds an editable descriptor from one accessor lambda
+  (`[](auto &u) -> auto & { return u.HitPoints; }`). Integer members accept
+  their C++ type's range, so a value can't wrap on save. Float members edit as
+  text in their shortest form.
+- `FieldTreeModel` still holds no pointer into the `DatFile`. Rows remember
+  their descriptor index, and `setData` goes through a `Writer` callback from
+  `EntityListModel::showFields`. The callback looks the entity up again and
+  refuses the write (invalid `QVariant`) if the civ has changed or the row
+  is no longer active. `EntityListModel::entityEdited` sets
+  `Session::setModified` and refreshes the list row.
+- **Units are per civ.** An edit changes only the selected civ's copy of the
+  unit, as in AGE without its auto-copy option. Techs are global.
+- `EntityBrowser` edits the value column on double-click or F2, and the name
+  cell forwards both. A delegate limits int spin boxes to the field's range.
+- **Saving.** File > Save (Ctrl+S, enabled when modified) and Save As.
+  `Session::saveAs` writes to a temporary file in the target folder, then
+  replaces the target with `std::filesystem::rename`. A failed write leaves
+  the old file untouched. Two Windows details:
+  - genieutils keeps the input file open after `load()`, so `loadDat` calls
+    `freelock()`.
+  - `QTemporaryFile::close()` doesn't release the handle, so the temp file
+    only reserves the name and is destroyed before genieutils writes to it.
+  Closing or opening another file with unsaved changes asks
+  Save / Discard / Cancel.
+- Not done: undo/redo (`QUndoStack`, M5), multi-select edits, ID-reference
+  pickers, and the save-time version upgrade (section 1).
 
 ### M2: Session and settings
 - `newage::Session` owns the `DatFile`, the detected `GameVersion`, the path
@@ -401,7 +435,8 @@ struct FieldDesc {
   `Unit::Type` handles those. Some fields are unions (`LanguageDLLName` /
   `LanguageDLLNameU16`) and must pick the member by game version.
 - A descriptor-sanity test checks that every descriptor round-trips through
-  get/set on a default-constructed object.
+  get/set on a default-constructed object. (Done for the M4c editable
+  fields: `ModelTest::editableFieldsRoundTrip`.)
 - Editing the language IDs: genieutils widens the 16-bit union members into
   the 32-bit ones on load, so reads are version-independent, but writes for
   pre-C15 versions must stay in `int16_t` range.

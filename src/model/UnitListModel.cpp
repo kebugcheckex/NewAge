@@ -38,12 +38,29 @@ QString UnitListModel::name(int row) const
     return tr("(unnamed)");
 }
 
-void UnitListModel::showFields(int row, FieldTreeModel &fields) const
+void UnitListModel::showFields(int row, FieldTreeModel &fields)
 {
-    if (const genie::Unit *u = unit(row))
-        fields.setObject(unitFields(), *u, &session()->names());
-    else
+    const genie::Unit *u = unit(row);
+    if (!u)
+    {
         fields.clear();
+        return;
+    }
+
+    // Units are per civ: an edit changes this civ's copy only. The unit is
+    // looked up again on every write, so the writer never holds a pointer
+    // into the data.
+    const int editCiv = civ();
+    const auto writer = [this, editCiv, row](int field, const QVariant &value) -> QVariant {
+        if (civ() != editCiv || !isActive(row))
+            return {};
+        genie::Unit &target = session()->dat()->Civs.at(editCiv).Units.at(row);
+        const FieldDesc<genie::Unit> &desc = unitFields().at(field);
+        desc.set(target, value);
+        entityEdited(row);
+        return desc.get(target);
+    };
+    fields.setObject(unitFields(), *u, &session()->names(), writer);
 }
 
 Qt::ItemFlags UnitListModel::flags(const QModelIndex &index) const

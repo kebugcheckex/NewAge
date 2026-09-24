@@ -4,6 +4,7 @@
 #include <QHeaderView>
 #include <QLineEdit>
 #include <QListView>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QStyledItemDelegate>
 #include <QTreeView>
@@ -36,6 +37,25 @@ protected:
     }
 };
 
+// Editors for field values: the default ones (a spin box for ints, a line edit
+// for floats, which edit as text), with int spin boxes limited to the field's
+// range.
+class FieldValueDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option,
+                          const QModelIndex &index) const override
+    {
+        QWidget *editor = QStyledItemDelegate::createEditor(parent, option, index);
+        if (auto *spin = qobject_cast<QSpinBox *>(editor))
+            spin->setRange(index.data(FieldTreeModel::MinimumRole).toInt(),
+                           index.data(FieldTreeModel::MaximumRole).toInt());
+        return editor;
+    }
+};
+
 } // namespace
 
 EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *model,
@@ -64,7 +84,8 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
     listView_->setItemDelegate(new InactiveRowDelegate(listView_));
 
     fieldView_->setModel(fieldModel_);
-    fieldView_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    fieldView_->setItemDelegateForColumn(FieldTreeModel::ValueColumn, new FieldValueDelegate(fieldView_));
+    fieldView_->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     fieldView_->setSelectionBehavior(QAbstractItemView::SelectRows);
     fieldView_->setAlternatingRowColors(true);
     fieldView_->header()->setSectionResizeMode(FieldTreeModel::NameColumn, QHeaderView::ResizeToContents);
@@ -91,6 +112,18 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
     connect(filterEdit_, &QLineEdit::textChanged, listFilter_, &ListFilterModel::setFilterFixedString);
     connect(listView_->selectionModel(), &QItemSelectionModel::currentChanged, this, &EntityBrowser::showSelected);
     connect(config_, &Config::changed, this, &EntityBrowser::applyConfig);
+    // Rows are selected whole, so the name cell edits the value too: F2 edits
+    // the current cell, kept on the value column, and a double-click on the
+    // name is passed on to the value.
+    connect(fieldView_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex &current) {
+        if (current.column() == FieldTreeModel::NameColumn && current.parent().isValid())
+            fieldView_->selectionModel()->setCurrentIndex(current.siblingAtColumn(FieldTreeModel::ValueColumn),
+                                                          QItemSelectionModel::NoUpdate);
+    });
+    connect(fieldView_, &QTreeView::doubleClicked, this, [this](const QModelIndex &index) {
+        if (index.column() == FieldTreeModel::NameColumn)
+            fieldView_->edit(index.siblingAtColumn(FieldTreeModel::ValueColumn));
+    });
     connect(fieldModel_, &QAbstractItemModel::modelReset, this, [this] {
         // Group headings span both columns so they read as section titles.
         for (int row = 0; row < fieldModel_->rowCount(); ++row)

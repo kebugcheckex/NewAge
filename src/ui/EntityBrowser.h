@@ -2,6 +2,11 @@
 
 #include <QWidget>
 
+// Needed for HideInactiveEntry: MSVC picks a pointer-to-member's size from what
+// it knows about the class at that point, so a forward declaration here would
+// make it differ between files that include Config.h first and those that don't.
+#include "core/Config.h"
+
 class QComboBox;
 class QLineEdit;
 class QListView;
@@ -9,15 +14,15 @@ class QTreeView;
 
 namespace newage {
 
-class Config;
 class EntityListModel;
 class FieldTreeModel;
 class ListFilterModel;
 class Session;
 
 // Civ picker + filterable entity list on the left, the selected entity's
-// fields on the right. Read-only for now. Works for any EntityListModel; the
-// per-type parts are the model and the Config entry that hides inactive rows.
+// fields on the right, where the editable ones open an editor on double-click
+// or F2. Works for any EntityListModel; the per-type parts are the model and
+// the Config entry that hides inactive rows.
 class EntityBrowser : public QWidget
 {
     Q_OBJECT

@@ -9,6 +9,19 @@ finds the `.dat` and the English language files itself, and units are listed
 by their in-game names ("82 - Castle"). File > Open Data File opens a loose
 `.dat` without strings.
 
+## Editing
+
+A few number fields can be edited: for units, hit points, line of sight,
+speed, the three resource costs and train time; for techs, the three resource
+costs and research time. Double-click the value (or press F2) to edit it.
+Everything else is read-only for now. Unit edits apply only to the civ
+selected in the combo box, since each civ has its own copy of every unit.
+
+File > Save (Ctrl+S) writes back to the open file, and File > Save As writes
+to a new one. Saving first writes a temporary file next to the target and
+then replaces the target, so a failed save leaves the old file intact. There
+is no undo yet.
+
 ## Layout
 
 ```

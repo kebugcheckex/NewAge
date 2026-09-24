@@ -70,20 +70,21 @@ const QList<FieldDesc<TechRef>> &techFields()
             const auto applies = [i](const TechRef &t) {
                 return i < static_cast<int>(t.tech.ResourceCosts.size());
             };
-            list.append({QStringLiteral("Cost %1 resource").arg(i + 1), costs, applies,
-                         [i](const TechRef &t) { return intValue(t.tech.ResourceCosts.at(i).Type); }});
-            list.append({QStringLiteral("Cost %1 amount").arg(i + 1), costs, applies,
-                         [i](const TechRef &t) { return intValue(t.tech.ResourceCosts.at(i).Amount); }});
+            list.append(numberField<TechRef>(QStringLiteral("Cost %1 resource").arg(i + 1), costs, applies,
+                                             [i](auto &t) -> auto & { return t.tech.ResourceCosts.at(i).Type; }));
+            list.append(numberField<TechRef>(QStringLiteral("Cost %1 amount").arg(i + 1), costs, applies,
+                                             [i](auto &t) -> auto & { return t.tech.ResourceCosts.at(i).Amount; }));
             // 1: the amount is paid; 0: it only has to be available.
-            list.append({QStringLiteral("Cost %1 paid").arg(i + 1), costs, applies,
-                         [i](const TechRef &t) { return intValue(t.tech.ResourceCosts.at(i).Flag); }});
+            list.append(numberField<TechRef>(QStringLiteral("Cost %1 paid").arg(i + 1), costs, applies,
+                                             [i](auto &t) -> auto & { return t.tech.ResourceCosts.at(i).Flag; }));
         }
 
         // DE can list several locations; only the first is shown for now.
         list.append({"Location", location, hasLocation,
                      [](const TechRef &t) { return intValue(t.tech.ResearchLocations.front().LocationID); }});
-        list.append({"Research time", location, hasLocation,
-                     [](const TechRef &t) { return intValue(t.tech.ResearchLocations.front().QueueTime); }});
+        list.append(numberField<TechRef>("Research time", location, hasLocation, [](auto &t) -> auto & {
+            return t.tech.ResearchLocations.front().QueueTime;
+        }));
         list.append({"Button", location, hasLocation,
                      [](const TechRef &t) { return intValue(t.tech.ResearchLocations.front().ButtonID); }});
         return list;

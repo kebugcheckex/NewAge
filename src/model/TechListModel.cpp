@@ -81,12 +81,26 @@ QString TechListModel::name(int row) const
     return tr("(unnamed)");
 }
 
-void TechListModel::showFields(int row, FieldTreeModel &fields) const
+void TechListModel::showFields(int row, FieldTreeModel &fields)
 {
-    if (const genie::Tech *t = tech(row))
-        fields.setObject(techFields(), TechRef{row, *t}, &session()->names());
-    else
+    if (!tech(row))
+    {
         fields.clear();
+        return;
+    }
+
+    // Techs are global, so the writer doesn't depend on the civ. It looks the
+    // tech up again on every write, so it never holds a pointer into the data.
+    const auto writer = [this, row](int field, const QVariant &value) -> QVariant {
+        if (!tech(row))
+            return {};
+        TechRef target{row, session()->dat()->Techs.at(row)};
+        const FieldDesc<TechRef> &desc = techFields().at(field);
+        desc.set(target, value);
+        entityEdited(row);
+        return desc.get(target);
+    };
+    fields.setObject(techFields(), TechRef{row, session()->dat()->Techs.at(row)}, &session()->names(), writer);
 }
 
 QVariant TechListModel::data(const QModelIndex &index, int role) const

@@ -35,7 +35,9 @@ public:
     // name, else "(unnamed)".
     virtual QString name(int row) const = 0;
     // Fills `fields` with the fields of the entity in `row`, or clears it.
-    virtual void showFields(int row, FieldTreeModel &fields) const = 0;
+    // Editable fields write to that entity of the current civ, as long as it
+    // stays the current civ; an edit marks the session modified.
+    virtual void showFields(int row, FieldTreeModel &fields) = 0;
 
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
 
@@ -45,6 +47,8 @@ protected:
     Session *session() const { return session_; }
     // Whether civ() is a valid civ of the open data.
     bool hasCiv() const;
+    // For showFields() writers, after a field of the entity in `row` changed.
+    void entityEdited(int row);
 
     // Called inside the model reset of setCiv(), after civ() has changed.
     virtual void civChanged() {}

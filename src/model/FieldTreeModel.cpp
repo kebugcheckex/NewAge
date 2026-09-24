@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 
 namespace newage {
 
@@ -14,10 +15,11 @@ constexpr quintptr kGroupId = 0;
 
 FieldTreeModel::FieldTreeModel(QObject *parent) : QAbstractItemModel(parent) {}
 
-void FieldTreeModel::setRows(const QList<Row> &rows)
+void FieldTreeModel::setRows(const QList<Row> &rows, Writer writer)
 {
     beginResetModel();
     groups_.clear();
+    writer_ = std::move(writer);
     for (const Row &row : rows)
     {
         auto it = std::find_if(groups_.begin(), groups_.end(),
@@ -74,7 +76,7 @@ QVariant FieldTreeModel::data(const QModelIndex &index, int role) const
         return {};
     }
 
-    const Row &row = groups_.at(static_cast<int>(index.internalId() - 1)).rows.at(index.row());
+    const Row &row = *rowAt(index);
     if (role == Qt::DisplayRole)
     {
         if (index.column() == NameColumn)
@@ -86,11 +88,82 @@ QVariant FieldTreeModel::data(const QModelIndex &index, int role) const
         note.replace(QLatin1Char('\n'), QLatin1Char(' '));
         return QStringLiteral("%1 \"%2\"").arg(displayText(row.value), note);
     }
-    if (role == Qt::ToolTipRole && index.column() == ValueColumn && !row.note.isEmpty())
-        return row.note;
-    if (role == Qt::UserRole && index.column() == ValueColumn)
+    if (index.column() != ValueColumn)
+        return {};
+    switch (role)
+    {
+    case Qt::EditRole:
+        // Floats edit as text, in the same shortest form they display in.
+        return row.value.typeId() == QMetaType::Float ? QVariant(displayText(row.value)) : row.value;
+    case Qt::ToolTipRole:
+        if (!row.note.isEmpty())
+            return row.note;
+        if (isEditable(row))
+            return tr("Double-click to edit");
+        return {};
+    case ValueRole:
         return row.value;
-    return {};
+    case MinimumRole:
+        return row.minimum;
+    case MaximumRole:
+        return row.maximum;
+    default:
+        return {};
+    }
+}
+
+Qt::ItemFlags FieldTreeModel::flags(const QModelIndex &index) const
+{
+    Qt::ItemFlags flags = QAbstractItemModel::flags(index);
+    if (index.column() == ValueColumn)
+    {
+        if (const Row *row = rowAt(index); row && isEditable(*row))
+            flags |= Qt::ItemIsEditable;
+    }
+    return flags;
+}
+
+bool FieldTreeModel::setData(const QModelIndex &index, const QVariant &value, int role)
+{
+    if (role != Qt::EditRole || !(flags(index) & Qt::ItemIsEditable))
+        return false;
+
+    Row &row = groups_[static_cast<int>(index.internalId() - 1)].rows[index.row()];
+    const QVariant parsed = parseValue(row, value);
+    if (!parsed.isValid())
+        return false;
+    // Leave the data (and its modified state) alone when nothing changes.
+    if (parsed == row.value)
+        return true;
+    const QVariant stored = writer_(row.field, parsed);
+    if (!stored.isValid())
+        return false;
+    row.value = stored;
+    emit dataChanged(index, index);
+    return true;
+}
+
+const FieldTreeModel::Row *FieldTreeModel::rowAt(const QModelIndex &index) const
+{
+    if (!index.isValid() || index.internalId() == kGroupId)
+        return nullptr;
+    return &groups_.at(static_cast<int>(index.internalId() - 1)).rows.at(index.row());
+}
+
+QVariant FieldTreeModel::parseValue(const Row &row, const QVariant &value)
+{
+    // Going through text also accepts an int or float QVariant.
+    const QString text = value.toString().trimmed();
+    bool ok = false;
+    if (row.value.typeId() == QMetaType::Float)
+    {
+        const float number = text.toFloat(&ok);
+        return ok && std::isfinite(number) ? QVariant(number) : QVariant();
+    }
+    const qlonglong number = text.toLongLong(&ok);
+    if (!ok || number < row.minimum || number > row.maximum)
+        return {};
+    return QVariant(static_cast<int>(number));
 }
 
 QVariant FieldTreeModel::headerData(int section, Qt::Orientation orientation, int role) const

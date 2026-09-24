@@ -39,8 +39,12 @@ public:
     // listed in `warnings` (if given) and left out of names().
     bool open(const GameDataset &dataset, QString *error = nullptr, QStringList *warnings = nullptr);
 
-    // Writes the data in the same format it was loaded with.
+    // Writes the data in the same format it was loaded with. The data goes to
+    // a temporary file next to `datPath` first, which then replaces it, so a
+    // failed save leaves an existing file as it was.
     bool saveAs(const QString &datPath, QString *error = nullptr);
+    // saveAs() to datPath().
+    bool save(QString *error = nullptr) { return saveAs(datPath_, error); }
 
     void close();
 

@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QLineEdit>
 #include <QListView>
+#include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTreeView>
@@ -13,6 +14,7 @@
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "model/FieldTreeModel.h"
 #include "model/TechListModel.h"
 #include "model/UnitListModel.h"
 #include "ui/EntityBrowser.h"
@@ -35,8 +37,8 @@ bool listsEmptySlots(const QListView *list)
     return false;
 }
 
-// Displayed value of field `name` in the field view, or a null string.
-QString shownValue(const QTreeView *view, const QString &name)
+// Value index of field `name` in the field view, or an invalid index.
+QModelIndex valueIndex(const QTreeView *view, const QString &name)
 {
     const QAbstractItemModel *model = view->model();
     for (int g = 0; g < model->rowCount(); ++g)
@@ -45,10 +47,16 @@ QString shownValue(const QTreeView *view, const QString &name)
         for (int r = 0; r < model->rowCount(group); ++r)
         {
             if (model->index(r, 0, group).data().toString() == name)
-                return model->index(r, 1, group).data().toString();
+                return model->index(r, 1, group);
         }
     }
     return {};
+}
+
+// Displayed value of field `name` in the field view, or a null string.
+QString shownValue(const QTreeView *view, const QString &name)
+{
+    return valueIndex(view, name).data().toString();
 }
 
 // Makes entity `id` current in the list, going through the filter proxy.
@@ -100,6 +108,7 @@ private slots:
     void browseSampleUnits();
     void hideEmptyUnits();
     void browseSampleTechs();
+    void editFields();
     void optionsDialogEditsConfig();
 
 private:
@@ -229,6 +238,55 @@ void BrowserTest::browseSampleTechs()
     session.close();
     QCOMPARE(techs->model()->rowCount(), 0);
     QCOMPARE(fields->model()->rowCount(), 0);
+}
+
+void BrowserTest::editFields()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+
+    Session session;
+    Config config(dir_.filePath(QStringLiteral("edit.json")));
+    const auto browser = unitBrowser(&session, &config);
+    auto *units = browser->findChild<QListView *>();
+    auto *fields = browser->findChild<QTreeView *>();
+    QString error;
+    QVERIFY2(session.open(kTcDat, *findVersionProfile(QStringLiteral("tc")), &error), qPrintable(error));
+    selectId(units, 4);
+
+    // Int fields edit in a spin box limited to the member's range.
+    const QModelIndex hp = valueIndex(fields, QStringLiteral("Hit points"));
+    QVERIFY(hp.flags() & Qt::ItemIsEditable);
+    QVERIFY(!(valueIndex(fields, QStringLiteral("Internal name")).flags() & Qt::ItemIsEditable));
+    QAbstractItemDelegate *delegate = fields->itemDelegateForIndex(hp);
+    std::unique_ptr<QWidget> editor(delegate->createEditor(fields->viewport(), QStyleOptionViewItem(), hp));
+    auto *spin = qobject_cast<QSpinBox *>(editor.get());
+    QVERIFY(spin);
+    QCOMPARE(spin->minimum(), -32768);
+    QCOMPARE(spin->maximum(), 32767);
+    delegate->setEditorData(spin, hp);
+    QCOMPARE(spin->value(), 30);
+    spin->setValue(45);
+    delegate->setModelData(spin, fields->model(), hp);
+    QCOMPARE(shownValue(fields, QStringLiteral("Hit points")), QStringLiteral("45"));
+    QCOMPARE(session.dat()->Civs.at(1).Units.at(4).HitPoints, int16_t(45));
+    QVERIFY(session.isModified());
+
+    // Floats edit as text.
+    const QModelIndex speed = valueIndex(fields, QStringLiteral("Speed"));
+    editor.reset(delegate->createEditor(fields->viewport(), QStyleOptionViewItem(), speed));
+    auto *line = qobject_cast<QLineEdit *>(editor.get());
+    QVERIFY(line);
+    delegate->setEditorData(line, speed);
+    QCOMPARE(line->text(), QStringLiteral("0.96"));
+    line->setText(QStringLiteral("1.2"));
+    delegate->setModelData(line, fields->model(), speed);
+    QCOMPARE(shownValue(fields, QStringLiteral("Speed")), QStringLiteral("1.2"));
+    QCOMPARE(session.dat()->Civs.at(1).Units.at(4).Speed, 1.2f);
+
+    // The current cell stays on the value column, where F2 edits it.
+    fields->setCurrentIndex(hp.siblingAtColumn(FieldTreeModel::NameColumn));
+    QCOMPARE(fields->currentIndex(), hp);
 }
 
 void BrowserTest::optionsDialogEditsConfig()

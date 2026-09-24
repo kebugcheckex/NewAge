@@ -24,7 +24,7 @@ public:
 
     // "(empty)" for an empty slot, else the label rule.
     QString name(int row) const override;
-    void showFields(int row, FieldTreeModel &fields) const override;
+    void showFields(int row, FieldTreeModel &fields) override;
 
     int rowCount(const QModelIndex &parent = {}) const override;
     Qt::ItemFlags flags(const QModelIndex &index) const override;

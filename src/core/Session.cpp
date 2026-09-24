@@ -1,8 +1,13 @@
 #include "core/Session.h"
 
 #include <exception>
+#include <filesystem>
+#include <system_error>
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QTemporaryFile>
 
 #include "core/GameInstall.h"
 #include "core/VersionProfile.h"
@@ -78,6 +83,10 @@ bool Session::loadDat(const QString &datPath, const VersionProfile &profile, QSt
         return false;
     }
 
+    // The data is all in memory now. genieutils keeps the file open until
+    // the next load, which would get in the way of saving over it.
+    dat->freelock();
+
     dat_ = std::move(dat);
     // genieutils may detect a more specific version from the file header.
     gameVersion_ = dat_->getGameVersion();
@@ -95,16 +104,49 @@ bool Session::saveAs(const QString &datPath, QString *error)
         return false;
     }
 
+    const auto fail = [&](const QString &reason) {
+        if (error)
+            *error = QStringLiteral("Failed to save %1: %2").arg(datPath, reason);
+        return false;
+    };
+
+    // Reserve a temporary name in the target folder, so the final rename
+    // doesn't cross file systems. genieutils opens the file itself.
+    QString tempPath;
+    {
+        QTemporaryFile temp(QFileInfo(datPath).absoluteDir().filePath(QStringLiteral(".newage-XXXXXX.tmp")));
+        if (!temp.open())
+            return fail(temp.errorString());
+        // QTemporaryFile::close() keeps the handle open, which would block the
+        // rename below on Windows; only destroying the object releases it.
+        temp.setAutoRemove(false);
+        tempPath = temp.fileName();
+    }
+    const auto failAndRemove = [&](const QString &reason) {
+        QFile::remove(tempPath);
+        return fail(reason);
+    };
+    // Temporary files are private to the owner; a saved file shouldn't be.
+    QFile::setPermissions(tempPath, QFile::exists(datPath) ? QFile::permissions(datPath)
+                                                           : QFile::ReadOwner | QFile::WriteOwner
+                                                                 | QFile::ReadGroup | QFile::ReadOther);
+
     try
     {
-        dat_->saveAs(nativePath(datPath).constData());
+        dat_->saveAs(nativePath(tempPath).constData());
     }
     catch (const std::exception &e)
     {
-        if (error)
-            *error = QStringLiteral("Failed to save %1: %2").arg(datPath, QString::fromLocal8Bit(e.what()));
-        return false;
+        return failAndRemove(QString::fromLocal8Bit(e.what()));
     }
+
+    // Replaces an existing file in one step (MoveFileEx on Windows), unlike
+    // QFile::rename.
+    std::error_code ec;
+    std::filesystem::rename(std::filesystem::path(tempPath.toStdU16String()),
+                            std::filesystem::path(datPath.toStdU16String()), ec);
+    if (ec)
+        return failAndRemove(QString::fromLocal8Bit(ec.message()));
 
     datPath_ = datPath;
     setModified(false);

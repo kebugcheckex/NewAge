@@ -25,6 +25,13 @@ bool EntityListModel::hasCiv() const
     return civ_ >= 0 && session_->isOpen();
 }
 
+void EntityListModel::entityEdited(int row)
+{
+    session_->setModified(true);
+    const QModelIndex changed = index(row);
+    emit dataChanged(changed, changed);
+}
+
 QVariant EntityListModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid())

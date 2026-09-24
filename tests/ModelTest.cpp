@@ -1,7 +1,9 @@
 #include <algorithm>
 
 #include <QAbstractItemModelTester>
+#include <QDir>
 #include <QFile>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -23,8 +25,8 @@ namespace {
 // The Conquerors sample in the gitignored data/ folder.
 const QString kTcDat = QStringLiteral(NEWAGE_SAMPLE_DATA_DIR "/empires2_x1_p1.dat");
 
-// Value of field `name` in `model`, searched across all groups.
-QVariant fieldValue(const FieldTreeModel &model, const QString &name)
+// Value column index of field `name` in `model`, searched across all groups.
+QModelIndex fieldIndex(const FieldTreeModel &model, const QString &name)
 {
     for (int g = 0; g < model.rowCount(); ++g)
     {
@@ -32,25 +34,64 @@ QVariant fieldValue(const FieldTreeModel &model, const QString &name)
         for (int r = 0; r < model.rowCount(group); ++r)
         {
             if (model.index(r, FieldTreeModel::NameColumn, group).data().toString() == name)
-                return model.index(r, FieldTreeModel::ValueColumn, group).data(Qt::UserRole);
+                return model.index(r, FieldTreeModel::ValueColumn, group);
         }
     }
     return {};
 }
 
-// Displayed text of field `name` in `model`, searched across all groups.
+// Value of field `name` in `model`.
+QVariant fieldValue(const FieldTreeModel &model, const QString &name)
+{
+    return fieldIndex(model, name).data(FieldTreeModel::ValueRole);
+}
+
+// Displayed text of field `name` in `model`.
 QString fieldText(const FieldTreeModel &model, const QString &name)
 {
-    for (int g = 0; g < model.rowCount(); ++g)
+    return fieldIndex(model, name).data().toString();
+}
+
+// Edits field `name` in `model` as a view would.
+bool editField(FieldTreeModel &model, const QString &name, const QVariant &value)
+{
+    return model.setData(fieldIndex(model, name), value);
+}
+
+// Checks that every editable descriptor stores the ends of its range (or a
+// fractional value for floats) and reads them back, and that the editable
+// ones are exactly `expected`.
+template <typename T>
+void checkEditableFields(const QList<FieldDesc<T>> &fields, T &object, const QStringList &expected)
+{
+    QStringList editable;
+    for (const FieldDesc<T> &field : fields)
     {
-        const QModelIndex group = model.index(g, 0);
-        for (int r = 0; r < model.rowCount(group); ++r)
+        if (!field.set)
+            continue;
+        editable << field.name;
+        QVERIFY2(!field.applies || field.applies(object), qPrintable(field.name));
+        if (field.get(object).typeId() == QMetaType::Float)
         {
-            if (model.index(r, FieldTreeModel::NameColumn, group).data().toString() == name)
-                return model.index(r, FieldTreeModel::ValueColumn, group).data().toString();
+            field.set(object, 12.625f);
+            QCOMPARE(field.get(object), QVariant(12.625f));
+            continue;
+        }
+        QCOMPARE(field.get(object).typeId(), QMetaType::Int);
+        QVERIFY2(field.minimum < field.maximum, qPrintable(field.name));
+        for (const int value : {field.minimum, field.maximum, 42})
+        {
+            field.set(object, value);
+            QCOMPARE(field.get(object), QVariant(value));
         }
     }
-    return {};
+    QCOMPARE(editable, expected);
+}
+
+template <typename T>
+const FieldDesc<T> &findField(const QList<FieldDesc<T>> &fields, const QString &name)
+{
+    return *std::find_if(fields.begin(), fields.end(), [&](const FieldDesc<T> &f) { return f.name == name; });
 }
 
 } // namespace
@@ -70,6 +111,9 @@ private slots:
     void techAvailabilityPerCiv();
     void techLabelsUseLanguageNames();
     void wrongVersionFailsToOpen();
+    void editableFieldsRoundTrip();
+    void fieldTreeEditing();
+    void editAndSaveSample();
 
 private:
     bool openSample(Session &session);
@@ -396,6 +440,172 @@ void ModelTest::wrongVersionFailsToOpen()
     QVERIFY(!session.open(hdDat, *findVersionProfile(QStringLiteral("tc")), &error));
     QVERIFY(!session.isOpen());
     QVERIFY(error.contains(QStringLiteral("no civilizations")));
+}
+
+void ModelTest::editableFieldsRoundTrip()
+{
+    genie::Unit unit;
+    unit.Type = genie::UT_Creatable;
+    checkEditableFields(unitFields(), unit,
+                        {"Hit points", "Line of sight", "Speed", "Cost 1 resource", "Cost 1 amount", "Cost 1 paid",
+                         "Cost 2 resource", "Cost 2 amount", "Cost 2 paid", "Cost 3 resource", "Cost 3 amount",
+                         "Cost 3 paid", "Train time"});
+    QCOMPARE(unit.HitPoints, int16_t(42));
+    QCOMPARE(unit.Creatable.TrainLocations.front().QueueTime, int16_t(42));
+
+    // Ranges follow the member types: int16_t hit points, uint8_t tech "paid".
+    QCOMPARE(findField(unitFields(), QStringLiteral("Hit points")).minimum, -32768);
+    QCOMPARE(findField(unitFields(), QStringLiteral("Hit points")).maximum, 32767);
+    QCOMPARE(findField(techFields(), QStringLiteral("Cost 1 paid")).minimum, 0);
+    QCOMPARE(findField(techFields(), QStringLiteral("Cost 1 paid")).maximum, 255);
+
+    // The Creatable fields don't exist below Type 70.
+    unit.Type = genie::UT_Bird;
+    FieldTreeModel model;
+    model.setObject(unitFields(), unit);
+    QVERIFY(!fieldIndex(model, QStringLiteral("Cost 1 amount")).isValid());
+    QVERIFY(!fieldIndex(model, QStringLiteral("Train time")).isValid());
+
+    genie::Tech tech;
+    tech.setGameVersion(genie::GV_TC);
+    TechRef ref{0, tech};
+    checkEditableFields(techFields(), ref,
+                        {"Cost 1 resource", "Cost 1 amount", "Cost 1 paid", "Cost 2 resource", "Cost 2 amount",
+                         "Cost 2 paid", "Cost 3 resource", "Cost 3 amount", "Cost 3 paid", "Research time"});
+    QCOMPARE(tech.ResearchLocations.front().QueueTime, int16_t(42));
+}
+
+void ModelTest::fieldTreeEditing()
+{
+    FieldTreeModel model;
+    QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+    const QList<FieldTreeModel::Row> rows = {
+        {"hp", "G", 30, {}, 0, -100, 100},
+        {"los", "G", 6.0f, {}, 1},
+        {"name", "G", QStringLiteral("ARCHR")},
+    };
+
+    // Without a writer nothing is editable.
+    model.setRows(rows);
+    QVERIFY(!(model.flags(fieldIndex(model, QStringLiteral("hp"))) & Qt::ItemIsEditable));
+    QVERIFY(!editField(model, QStringLiteral("hp"), 35));
+
+    QList<std::pair<int, QVariant>> writes;
+    bool objectGone = false;
+    model.setRows(rows, [&](int field, const QVariant &value) -> QVariant {
+        if (objectGone)
+            return {};
+        writes.append({field, value});
+        return value;
+    });
+    const QModelIndex hp = fieldIndex(model, QStringLiteral("hp"));
+    QVERIFY(model.flags(hp) & Qt::ItemIsEditable);
+    QVERIFY(!(model.flags(hp.siblingAtColumn(FieldTreeModel::NameColumn)) & Qt::ItemIsEditable));
+    QVERIFY(!(model.flags(fieldIndex(model, QStringLiteral("name"))) & Qt::ItemIsEditable));
+    QVERIFY(!(model.flags(model.index(0, 0)) & Qt::ItemIsEditable));
+    QCOMPARE(hp.data(FieldTreeModel::MinimumRole).toInt(), -100);
+    QCOMPARE(hp.data(FieldTreeModel::MaximumRole).toInt(), 100);
+    QCOMPARE(hp.data(Qt::EditRole), QVariant(30));
+    // Floats edit as their shortest text.
+    QCOMPARE(fieldIndex(model, QStringLiteral("los")).data(Qt::EditRole), QVariant(QStringLiteral("6")));
+
+    // Bad input is refused without reaching the writer.
+    QVERIFY(!editField(model, QStringLiteral("hp"), QStringLiteral("abc")));
+    QVERIFY(!editField(model, QStringLiteral("hp"), QStringLiteral("2.5")));
+    QVERIFY(!editField(model, QStringLiteral("hp"), 101));
+    QVERIFY(!editField(model, QStringLiteral("los"), QStringLiteral("inf")));
+    QVERIFY(!editField(model, QStringLiteral("los"), QString()));
+    QVERIFY(!editField(model, QStringLiteral("name"), QStringLiteral("X")));
+    // The current value is accepted as a no-op.
+    QVERIFY(editField(model, QStringLiteral("hp"), 30));
+    QVERIFY(writes.isEmpty());
+
+    QSignalSpy changed(&model, &QAbstractItemModel::dataChanged);
+    QVERIFY(editField(model, QStringLiteral("hp"), QStringLiteral(" -100 ")));
+    QVERIFY(editField(model, QStringLiteral("los"), QStringLiteral("0.2")));
+    QCOMPARE(writes.size(), 2);
+    QCOMPARE(writes.at(0), std::make_pair(0, QVariant(-100)));
+    QCOMPARE(writes.at(1), std::make_pair(1, QVariant(0.2f)));
+    QCOMPARE(changed.size(), 2);
+    QCOMPARE(fieldText(model, QStringLiteral("hp")), QStringLiteral("-100"));
+    QCOMPARE(fieldText(model, QStringLiteral("los")), QStringLiteral("0.2"));
+
+    // A failed write leaves the shown value alone.
+    objectGone = true;
+    QVERIFY(!editField(model, QStringLiteral("hp"), 50));
+    QCOMPARE(fieldValue(model, QStringLiteral("hp")).toInt(), -100);
+}
+
+void ModelTest::editAndSaveSample()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+
+    // Work on a copy, since saving writes back to the file.
+    QTemporaryDir dir;
+    const QString dat = dir.filePath(QStringLiteral("edited.dat"));
+    QVERIFY(QFile::copy(kTcDat, dat));
+    const VersionProfile &tc = *findVersionProfile(QStringLiteral("tc"));
+    Session session;
+    QString error;
+    QVERIFY2(session.open(dat, tc, &error), qPrintable(error));
+
+    // Archer (unit 4) of civ 1: only that civ's copy changes.
+    UnitListModel units(&session);
+    units.setCiv(1);
+    QSignalSpy unitChanged(&units, &QAbstractItemModel::dataChanged);
+    FieldTreeModel fields;
+    units.showFields(4, fields);
+    QVERIFY(!session.isModified());
+    QVERIFY(editField(fields, QStringLiteral("Hit points"), 35));
+    QVERIFY(session.isModified());
+    QCOMPARE(unitChanged.size(), 1);
+    QVERIFY(editField(fields, QStringLiteral("Line of sight"), QStringLiteral("7.5")));
+    QVERIFY(editField(fields, QStringLiteral("Cost 1 amount"), 99));
+    QVERIFY(editField(fields, QStringLiteral("Train time"), 40));
+    QCOMPARE(fieldText(fields, QStringLiteral("Hit points")), QStringLiteral("35"));
+    const genie::DatFile &data = *session.dat();
+    QCOMPARE(data.Civs.at(1).Units.at(4).HitPoints, int16_t(35));
+    QCOMPARE(data.Civs.at(2).Units.at(4).HitPoints, int16_t(30));
+    // Text and ID fields stay read-only.
+    QVERIFY(!editField(fields, QStringLiteral("Internal name"), QStringLiteral("X")));
+    QVERIFY(!editField(fields, QStringLiteral("Language name"), 1));
+
+    // Once the list shows another civ, the old field rows no longer write.
+    units.setCiv(2);
+    QVERIFY(!editField(fields, QStringLiteral("Hit points"), 36));
+    QCOMPARE(data.Civs.at(2).Units.at(4).HitPoints, int16_t(30));
+
+    // Loom (tech 22).
+    TechListModel techs(&session);
+    techs.setCiv(1);
+    techs.showFields(22, fields);
+    QVERIFY(editField(fields, QStringLiteral("Research time"), 30));
+    QVERIFY(editField(fields, QStringLiteral("Cost 1 amount"), 60));
+
+    QVERIFY2(session.save(&error), qPrintable(error));
+    QVERIFY(!session.isModified());
+    // The temporary file was renamed over the original.
+    QCOMPARE(QDir(dir.path()).entryList(QDir::Files | QDir::Hidden), QStringList{QStringLiteral("edited.dat")});
+
+    Session reopened;
+    QVERIFY2(reopened.open(dat, tc, &error), qPrintable(error));
+    const genie::DatFile &saved = *reopened.dat();
+    const genie::Unit &archer = saved.Civs.at(1).Units.at(4);
+    QCOMPARE(archer.HitPoints, int16_t(35));
+    QCOMPARE(archer.LineOfSight, 7.5f);
+    QCOMPARE(archer.Creatable.ResourceCosts.at(0).Amount, int16_t(99));
+    QCOMPARE(archer.Creatable.TrainLocations.front().QueueTime, int16_t(40));
+    QCOMPARE(saved.Civs.at(2).Units.at(4).HitPoints, int16_t(30));
+    QCOMPARE(saved.Techs.at(22).ResearchLocations.front().QueueTime, int16_t(30));
+    QCOMPARE(saved.Techs.at(22).ResourceCosts.at(0).Amount, int16_t(60));
+
+    // A failed save keeps the session's path and modified state.
+    techs.showFields(22, fields);
+    QVERIFY(editField(fields, QStringLiteral("Research time"), 31));
+    QVERIFY(!session.saveAs(dir.filePath(QStringLiteral("missing/edited.dat")), &error));
+    QVERIFY(session.isModified());
+    QCOMPARE(session.datPath(), dat);
 }
 
 QTEST_GUILESS_MAIN(ModelTest)

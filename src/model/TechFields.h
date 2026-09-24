@@ -12,11 +12,12 @@ class Tech;
 namespace newage {
 
 // A tech together with its ID, which genie::Tech doesn't store: the ID is the
-// tech's index in DatFile::Techs.
+// tech's index in DatFile::Techs. The reference is non-const so that editable
+// fields can write through it.
 struct TechRef
 {
     int id;
-    const genie::Tech &tech;
+    genie::Tech &tech;
 };
 
 // Descriptors for the tech fields shown in the property view, in display

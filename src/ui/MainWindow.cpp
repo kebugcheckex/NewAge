@@ -80,6 +80,8 @@ void MainWindow::createActions()
     openAction->setShortcut(QKeySequence::Open);
     fileMenu->addAction(tr("Open &Data File..."), this, &MainWindow::openDataFile);
 
+    saveAction_ = fileMenu->addAction(tr("&Save"), this, &MainWindow::saveFile);
+    saveAction_->setShortcut(QKeySequence::Save);
     saveAsAction_ = fileMenu->addAction(tr("Save &As..."), this, &MainWindow::saveFileAs);
     saveAsAction_->setShortcut(QKeySequence::SaveAs);
 
@@ -204,15 +206,26 @@ void MainWindow::openDataFile()
     statusBar()->showMessage(tr("Loaded %1").arg(path), 5000);
 }
 
-void MainWindow::saveFileAs()
+bool MainWindow::saveFile()
 {
     if (!session_->isOpen())
-        return;
+        return false;
+    return saveTo(session_->datPath());
+}
+
+bool MainWindow::saveFileAs()
+{
+    if (!session_->isOpen())
+        return false;
 
     const QString path = QFileDialog::getSaveFileName(this, tr("Save data file"), session_->datPath(), kDatFilter);
     if (path.isEmpty())
-        return;
+        return false;
+    return saveTo(path);
+}
 
+bool MainWindow::saveTo(const QString &path)
+{
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QString error;
     const bool saved = session_->saveAs(path, &error);
@@ -221,10 +234,11 @@ void MainWindow::saveFileAs()
     if (!saved)
     {
         QMessageBox::critical(this, tr("Save failed"), error);
-        return;
+        return false;
     }
-    statusBar()->showMessage(tr("Saved %1").arg(path), 5000);
+    statusBar()->showMessage(tr("Saved %1").arg(QDir::toNativeSeparators(path)), 5000);
     refresh();
+    return true;
 }
 
 void MainWindow::showOptions()
@@ -245,8 +259,11 @@ bool MainWindow::confirmDiscardChanges()
         return true;
 
     const auto answer = QMessageBox::question(
-        this, tr("Unsaved changes"), tr("Discard unsaved changes?"),
-        QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
+        this, tr("Unsaved changes"),
+        tr("Save changes to %1?").arg(QFileInfo(session_->datPath()).fileName()),
+        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+    if (answer == QMessageBox::Save)
+        return saveFile();
     return answer == QMessageBox::Discard;
 }
 
@@ -260,6 +277,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::refresh()
 {
+    saveAction_->setEnabled(session_->isOpen() && session_->isModified());
     saveAsAction_->setEnabled(session_->isOpen());
 
     if (!session_->isOpen())
