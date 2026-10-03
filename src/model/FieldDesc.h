@@ -11,6 +11,22 @@
 
 namespace newage {
 
+// What an int field's value is the ID of. Views show the referenced entity's
+// name with the ID.
+enum class RefKind
+{
+    None,
+    Tech,
+    // A civ resource (Food Storage, ...), as in resource costs.
+    Resource,
+    // An index into DatFile::Civs. -1 is not a civ.
+    Civ,
+    // An index into DatFile::Effects. -1 is not an effect.
+    Effect,
+    // An index into the current civ's units. -1 is not a unit.
+    Unit,
+};
+
 // Describes one field of an entity type T (a unit, a tech, ...), so views can
 // show any entity without per-field widget code.
 // Only number fields can be editable; build those with numberField().
@@ -31,6 +47,7 @@ struct FieldDesc
     // Range an int field accepts, inclusive. Unused for floats.
     int minimum = 0;
     int maximum = 0;
+    RefKind ref = RefKind::None;
 };
 
 // An editable field for a number member of T. `access` returns a reference to

@@ -3,6 +3,7 @@
 #include "core/Session.h"
 #include "genie/dat/DatFile.h"
 #include "model/FieldTreeModel.h"
+#include "model/ResourceNames.h"
 #include "model/UnitFields.h"
 
 namespace newage {
@@ -60,7 +61,10 @@ void UnitListModel::showFields(int row, FieldTreeModel &fields)
         entityEdited(row);
         return desc.get(target);
     };
-    fields.setObject(unitFields(), *u, &session()->names(), writer);
+    const auto refNamer = [this](RefKind kind, int id) {
+        return kind == RefKind::Resource ? resourceName(session()->gameVersion(), id) : QString();
+    };
+    fields.setObject(unitFields(), *u, &session()->names(), writer, refNamer);
 }
 
 Qt::ItemFlags UnitListModel::flags(const QModelIndex &index) const

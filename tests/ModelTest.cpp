@@ -13,6 +13,7 @@
 #include "genie/dat/DatFile.h"
 #include "model/FieldTreeModel.h"
 #include "model/ListFilterModel.h"
+#include "model/ResourceNames.h"
 #include "model/TechFields.h"
 #include "model/TechListModel.h"
 #include "model/UnitFields.h"
@@ -107,12 +108,16 @@ private slots:
     void sampleUnitValues();
     void labelsUseLanguageNames();
     void techFieldsFollowRequiredTechCount();
+    void techCivAndEffectShowNames();
     void sampleTechValues();
     void techAvailabilityPerCiv();
     void techLabelsUseLanguageNames();
     void wrongVersionFailsToOpen();
     void editableFieldsRoundTrip();
+    void costFieldsSkipUnusedSlots();
+    void resourceNamesPerVersion();
     void fieldTreeEditing();
+    void referenceLabelFollowsEdits();
     void editAndSaveSample();
 
 private:
@@ -193,6 +198,11 @@ void ModelTest::sampleUnitValues()
     QCOMPARE(fieldValue(fields, QStringLiteral("Hit points")).toInt(), 30);
     QCOMPARE(fieldValue(fields, QStringLiteral("Line of sight")).toFloat(), 6.0f);
     QCOMPARE(fieldValue(fields, QStringLiteral("Speed")).toFloat(), 0.96f);
+    // The list model labels resource costs: 25 wood, 45 gold.
+    units.showFields(4, fields);
+    QCOMPARE(fieldText(fields, QStringLiteral("Cost 1 resource")), QStringLiteral("Wood Storage (1)"));
+    QCOMPARE(fieldText(fields, QStringLiteral("Cost 2 resource")), QStringLiteral("Gold Storage (3)"));
+    QVERIFY(!fieldIndex(fields, QStringLiteral("Cost 3 resource")).isValid());
 
     // Empty slots are listed but can't be selected.
     const auto &pointers = session.dat()->Civs.at(1).UnitPointers;
@@ -273,17 +283,60 @@ void ModelTest::techFieldsFollowRequiredTechCount()
     model.setObject(techFields(), TechRef{7, tech});
     QCOMPARE(fieldValue(model, QStringLiteral("ID")).toInt(), 7);
     QCOMPARE(fieldValue(model, QStringLiteral("Type")).toString(), QStringLiteral("2 - Age"));
-    QVERIFY(fieldValue(model, QStringLiteral("Required tech 4")).isValid());
+    // Unused slots (-1) are left out.
+    QVERIFY(!fieldValue(model, QStringLiteral("Required tech 1")).isValid());
+    std::fill(tech.RequiredTechs.begin(), tech.RequiredTechs.end(), 3);
+    model.setObject(techFields(), TechRef{7, tech});
+    QCOMPARE(fieldValue(model, QStringLiteral("Required tech 4")).toInt(), 3);
     QVERIFY(!fieldValue(model, QStringLiteral("Required tech 5")).isValid());
+    // Without a namer, references show the plain ID.
+    QCOMPARE(fieldText(model, QStringLiteral("Required tech 4")), QStringLiteral("3"));
 
     tech.setGameVersion(genie::GV_TC);
+    std::fill(tech.RequiredTechs.begin(), tech.RequiredTechs.end(), 3);
+    tech.RequiredTechs.at(1) = -1;
     model.setObject(techFields(), TechRef{7, tech});
-    QCOMPARE(fieldValue(model, QStringLiteral("Required tech 6")).toInt(), -1);
+    QCOMPARE(fieldValue(model, QStringLiteral("Required tech 6")).toInt(), 3);
+    QVERIFY(!fieldValue(model, QStringLiteral("Required tech 2")).isValid());
 
     // No research location (possible in DE): the location rows are left out.
     tech.ResearchLocations.clear();
     model.setObject(techFields(), TechRef{7, tech});
     QVERIFY(!fieldValue(model, QStringLiteral("Research time")).isValid());
+}
+
+void ModelTest::techCivAndEffectShowNames()
+{
+    FieldTreeModel model;
+    genie::Tech tech;
+    tech.Civ = 1;
+    tech.EffectID = 22;
+    const FieldTreeModel::RefNamer namer = [](RefKind kind, int id) {
+        switch (kind)
+        {
+        case RefKind::Civ: return id == 1 ? QStringLiteral("Briton") : QString();
+        case RefKind::Effect: return id == 22 ? QStringLiteral("Loom") : QString();
+        case RefKind::Unit: return id == 109 ? QStringLiteral("Town Center") : QString();
+        default: return QString();
+        }
+    };
+    tech.ResearchLocations.front().LocationID = 109;
+    model.setObject(techFields(), TechRef{7, tech}, nullptr, {}, namer);
+    QCOMPARE(fieldValue(model, QStringLiteral("Civ")).toInt(), 1);
+    QCOMPARE(fieldText(model, QStringLiteral("Civ")), QStringLiteral("Briton (1)"));
+    QCOMPARE(fieldValue(model, QStringLiteral("Effect")).toInt(), 22);
+    QCOMPARE(fieldText(model, QStringLiteral("Effect")), QStringLiteral("Loom (22)"));
+    QCOMPARE(fieldValue(model, QStringLiteral("Location")).toInt(), 109);
+    QCOMPARE(fieldText(model, QStringLiteral("Location")), QStringLiteral("Town Center (109)"));
+
+    // -1 is not an entity, so the number is left as-is.
+    tech.Civ = -1;
+    tech.EffectID = -1;
+    tech.ResearchLocations.front().LocationID = -1;
+    model.setObject(techFields(), TechRef{7, tech}, nullptr, {}, namer);
+    QCOMPARE(fieldText(model, QStringLiteral("Civ")), QStringLiteral("-1"));
+    QCOMPARE(fieldText(model, QStringLiteral("Effect")), QStringLiteral("-1"));
+    QCOMPARE(fieldText(model, QStringLiteral("Location")), QStringLiteral("-1"));
 }
 
 void ModelTest::sampleTechValues()
@@ -312,14 +365,35 @@ void ModelTest::sampleTechValues()
     QCOMPARE(fieldValue(fields, QStringLiteral("Internal name")).toString(), QStringLiteral("Loom"));
     QCOMPARE(fieldValue(fields, QStringLiteral("Type")).toString(), QStringLiteral("0 - Regular"));
     QCOMPARE(fieldValue(fields, QStringLiteral("Civ")).toInt(), -1);
+    QCOMPARE(fieldText(fields, QStringLiteral("Civ")), QStringLiteral("-1"));
     QCOMPARE(fieldValue(fields, QStringLiteral("Effect")).toInt(), 22);
+    const QString effectName = QString::fromLatin1(session.dat()->Effects.at(22).Name);
+    QVERIFY(!effectName.isEmpty());
+    QCOMPARE(fieldText(fields, QStringLiteral("Effect")), QStringLiteral("%1 (22)").arg(effectName));
     QCOMPARE(fieldValue(fields, QStringLiteral("Required tech 1")).toInt(), 104);
+    QCOMPARE(fieldText(fields, QStringLiteral("Required tech 1")), QStringLiteral("Dark Age (104)"));
+    QVERIFY(!fieldValue(fields, QStringLiteral("Required tech 2")).isValid());
     QCOMPARE(fieldValue(fields, QStringLiteral("Required tech count")).toInt(), 1);
     QCOMPARE(fieldValue(fields, QStringLiteral("Cost 1 resource")).toInt(), 3);
+    QCOMPARE(fieldText(fields, QStringLiteral("Cost 1 resource")), QStringLiteral("Gold Storage (3)"));
+    QVERIFY(!fieldValue(fields, QStringLiteral("Cost 2 resource")).isValid());
     QCOMPARE(fieldValue(fields, QStringLiteral("Cost 1 amount")).toInt(), 50);
     QCOMPARE(fieldValue(fields, QStringLiteral("Cost 1 paid")).toInt(), 1);
     QCOMPARE(fieldValue(fields, QStringLiteral("Location")).toInt(), 109);
+    const genie::Unit &building = session.dat()->Civs.at(1).Units.at(109);
+    QString locationName = session.names().text(building.LanguageDLLName);
+    if (locationName.isEmpty())
+        locationName = QString::fromLatin1(building.Name);
+    QVERIFY(!locationName.isEmpty());
+    QCOMPARE(fieldText(fields, QStringLiteral("Location")), QStringLiteral("%1 (109)").arg(locationName));
     QCOMPARE(fieldValue(fields, QStringLiteral("Research time")).toInt(), 25);
+
+    // Yeomen is the Britons' unique tech.
+    techs.showFields(3, fields);
+    QCOMPARE(fieldValue(fields, QStringLiteral("Civ")).toInt(), 1);
+    const QString civName = QString::fromLatin1(session.dat()->Civs.at(1).Name);
+    QVERIFY(!civName.isEmpty());
+    QCOMPARE(fieldText(fields, QStringLiteral("Civ")), QStringLiteral("%1 (1)").arg(civName));
 
     // Feudal Age is an age tech.
     techs.showFields(101, fields);
@@ -446,6 +520,9 @@ void ModelTest::editableFieldsRoundTrip()
 {
     genie::Unit unit;
     unit.Type = genie::UT_Creatable;
+    // Unused cost slots (resource -1) are left out, so fill them all.
+    for (auto &cost : unit.Creatable.ResourceCosts)
+        cost.Type = 0;
     checkEditableFields(unitFields(), unit,
                         {"Hit points", "Line of sight", "Speed", "Cost 1 resource", "Cost 1 amount", "Cost 1 paid",
                          "Cost 2 resource", "Cost 2 amount", "Cost 2 paid", "Cost 3 resource", "Cost 3 amount",
@@ -468,11 +545,50 @@ void ModelTest::editableFieldsRoundTrip()
 
     genie::Tech tech;
     tech.setGameVersion(genie::GV_TC);
+    for (auto &cost : tech.ResourceCosts)
+        cost.Type = 0;
     TechRef ref{0, tech};
     checkEditableFields(techFields(), ref,
                         {"Cost 1 resource", "Cost 1 amount", "Cost 1 paid", "Cost 2 resource", "Cost 2 amount",
                          "Cost 2 paid", "Cost 3 resource", "Cost 3 amount", "Cost 3 paid", "Research time"});
     QCOMPARE(tech.ResearchLocations.front().QueueTime, int16_t(42));
+}
+
+void ModelTest::costFieldsSkipUnusedSlots()
+{
+    genie::Unit unit;
+    unit.Type = genie::UT_Creatable;
+    unit.Creatable.ResourceCosts.at(0).Type = 0;
+    unit.Creatable.ResourceCosts.at(2).Type = 3;
+    FieldTreeModel model;
+    model.setObject(unitFields(), unit);
+    QVERIFY(fieldIndex(model, QStringLiteral("Cost 1 paid")).isValid());
+    QVERIFY(!fieldIndex(model, QStringLiteral("Cost 2 resource")).isValid());
+    QVERIFY(!fieldIndex(model, QStringLiteral("Cost 2 amount")).isValid());
+    QVERIFY(!fieldIndex(model, QStringLiteral("Cost 2 paid")).isValid());
+    QCOMPARE(fieldValue(model, QStringLiteral("Cost 3 resource")).toInt(), 3);
+
+    genie::Tech tech;
+    tech.setGameVersion(genie::GV_TC);
+    tech.ResourceCosts.at(1).Type = 1;
+    model.setObject(techFields(), TechRef{0, tech});
+    QVERIFY(!fieldIndex(model, QStringLiteral("Cost 1 amount")).isValid());
+    QCOMPARE(fieldValue(model, QStringLiteral("Cost 2 resource")).toInt(), 1);
+    QVERIFY(!fieldIndex(model, QStringLiteral("Cost 3 amount")).isValid());
+}
+
+void ModelTest::resourceNamesPerVersion()
+{
+    QCOMPARE(resourceName(genie::GV_TC, 0), QStringLiteral("Food Storage"));
+    QCOMPARE(resourceName(genie::GV_TC, 3), QStringLiteral("Gold Storage"));
+    // AoE and AoK name some resources differently.
+    QCOMPARE(resourceName(genie::GV_RoR, 7), QStringLiteral("Artifacts Captured"));
+    QCOMPARE(resourceName(genie::GV_TC, 7), QStringLiteral("Relics Captured"));
+    // AoK ends at 188 (Gold Score), The Conquerors at 197.
+    QCOMPARE(resourceNames(genie::GV_AoK).size(), 189);
+    QCOMPARE(resourceNames(genie::GV_TC).size(), 198);
+    QCOMPARE(resourceName(genie::GV_TC, 198), QString());
+    QCOMPARE(resourceName(genie::GV_TC, -1), QString());
 }
 
 void ModelTest::fieldTreeEditing()
@@ -534,6 +650,26 @@ void ModelTest::fieldTreeEditing()
     objectGone = true;
     QVERIFY(!editField(model, QStringLiteral("hp"), 50));
     QCOMPARE(fieldValue(model, QStringLiteral("hp")).toInt(), -100);
+}
+
+void ModelTest::referenceLabelFollowsEdits()
+{
+    FieldTreeModel model;
+    const FieldTreeModel::RefNamer namer = [](RefKind kind, int id) {
+        return kind == RefKind::Resource ? resourceName(genie::GV_TC, id) : QString();
+    };
+    FieldTreeModel::Row row{"res", "G", 3, {}, 0, -32768, 32767};
+    row.ref = RefKind::Resource;
+    row.label = namer(row.ref, 3);
+    model.setRows({row}, [](int, const QVariant &value) { return value; }, namer);
+    QCOMPARE(fieldText(model, QStringLiteral("res")), QStringLiteral("Gold Storage (3)"));
+    QCOMPARE(fieldIndex(model, QStringLiteral("res")).data(Qt::EditRole), QVariant(3));
+
+    QVERIFY(editField(model, QStringLiteral("res"), 0));
+    QCOMPARE(fieldText(model, QStringLiteral("res")), QStringLiteral("Food Storage (0)"));
+    // An ID without a name shows as the plain number.
+    QVERIFY(editField(model, QStringLiteral("res"), 9999));
+    QCOMPARE(fieldText(model, QStringLiteral("res")), QStringLiteral("9999"));
 }
 
 void ModelTest::editAndSaveSample()

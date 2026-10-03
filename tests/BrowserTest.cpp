@@ -216,7 +216,8 @@ void BrowserTest::browseSampleTechs()
     // Yeomen (tech 3) is the Britons' (civ 1) unique tech.
     selectId(techs, 3);
     QCOMPARE(shownValue(fields, QStringLiteral("Internal name")), QStringLiteral("British Yeoman"));
-    QCOMPARE(shownValue(fields, QStringLiteral("Civ")), QStringLiteral("1"));
+    const QString civName = QString::fromLatin1(session.dat()->Civs.at(1).Name);
+    QCOMPARE(shownValue(fields, QStringLiteral("Civ")), QStringLiteral("%1 (1)").arg(civName));
     QCOMPARE(shownValue(fields, QStringLiteral("Cost 1 amount")), QStringLiteral("750"));
 
     // Another civ can't research it, but it stays selected and shown.

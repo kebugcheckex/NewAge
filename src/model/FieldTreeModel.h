@@ -48,6 +48,12 @@ public:
         // Range of an editable int field, inclusive.
         int minimum = 0;
         int maximum = 0;
+        // Shown instead of the value, which follows in parentheses, e.g. the
+        // name of the tech a tech ID refers to.
+        QString label = {};
+        // What the value is the ID of. The label is looked up again after an
+        // edit.
+        RefKind ref = RefKind::None;
     };
 
     // Stores `value` (int or float, checked against the row's range) in field
@@ -55,16 +61,20 @@ public:
     // QVariant if the object is gone.
     using Writer = std::function<QVariant(int field, const QVariant &value)>;
 
+    // Name of the entity of kind `kind` with ID `id`, e.g. "Loom" for tech
+    // 22, or an empty string if there is none.
+    using RefNamer = std::function<QString(RefKind kind, int id)>;
+
     explicit FieldTreeModel(QObject *parent = nullptr);
 
     // Reads every field of `fields` that applies to `object`. The model keeps
     // the values, not the object, so it can't be left pointing at freed data.
     // String ID fields are looked up in `names` (if given). Fields with a
     // setter are editable through `writer` (if given), which is passed their
-    // index in `fields`.
+    // index in `fields`. Reference fields are labelled by `refNamer` (if given).
     template <typename T>
     void setObject(const QList<FieldDesc<T>> &fields, const T &object, const NameProvider *names = nullptr,
-                   Writer writer = {})
+                   Writer writer = {}, const RefNamer &refNamer = {})
     {
         QList<Row> rows;
         for (qsizetype i = 0; i < fields.size(); ++i)
@@ -75,6 +85,9 @@ public:
             Row row{field.name, field.group, field.get(object)};
             if (field.isStringId && names)
                 row.note = names->text(row.value.toInt());
+            row.ref = field.ref;
+            if (row.ref != RefKind::None && refNamer)
+                row.label = refNamer(row.ref, row.value.toInt());
             if (field.set)
             {
                 row.field = static_cast<int>(i);
@@ -83,11 +96,12 @@ public:
             }
             rows.append(row);
         }
-        setRows(rows, std::move(writer));
+        setRows(rows, std::move(writer), refNamer);
     }
 
-    // Rows with `field` >= 0 are editable when `writer` is set.
-    void setRows(const QList<Row> &rows, Writer writer = {});
+    // Rows with `field` >= 0 are editable when `writer` is set. `refNamer`
+    // relabels reference rows after an edit.
+    void setRows(const QList<Row> &rows, Writer writer = {}, RefNamer refNamer = {});
     void clear() { setRows({}); }
 
     QModelIndex index(int row, int column, const QModelIndex &parent = {}) const override;
@@ -122,6 +136,7 @@ private:
 
     QList<Group> groups_;
     Writer writer_;
+    RefNamer refNamer_;
 };
 
 } // namespace newage

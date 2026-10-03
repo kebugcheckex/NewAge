@@ -81,14 +81,19 @@ const QList<FieldDesc<Unit>> &unitFields()
             {"Resource capacity", stats, {}, [](const Unit &u) { return intValue(u.ResourceCapacity); }},
         };
 
-        // Always 3 slots (Creatable::getResourceCostsSize).
+        // Always 3 slots (Creatable::getResourceCostsSize). Unused ones have
+        // resource -1 and are left out.
         for (int i = 0; i < 3; ++i)
         {
             const auto applies = [i](const Unit &u) {
-                return isCreatable(u) && i < static_cast<int>(u.Creatable.ResourceCosts.size());
+                return isCreatable(u) && i < static_cast<int>(u.Creatable.ResourceCosts.size())
+                       && u.Creatable.ResourceCosts.at(i).Type >= 0;
             };
-            list.append(numberField<Unit>(QStringLiteral("Cost %1 resource").arg(i + 1), costs, applies,
-                                          [i](auto &u) -> auto & { return u.Creatable.ResourceCosts.at(i).Type; }));
+            FieldDesc<Unit> resource = numberField<Unit>(
+                QStringLiteral("Cost %1 resource").arg(i + 1), costs, applies,
+                [i](auto &u) -> auto & { return u.Creatable.ResourceCosts.at(i).Type; });
+            resource.ref = RefKind::Resource;
+            list.append(resource);
             list.append(numberField<Unit>(QStringLiteral("Cost %1 amount").arg(i + 1), costs, applies,
                                           [i](auto &u) -> auto & { return u.Creatable.ResourceCosts.at(i).Amount; }));
             // 1: the amount is paid; 0: it only has to be available.

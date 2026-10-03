@@ -5,6 +5,7 @@
 #include "core/Session.h"
 #include "genie/dat/DatFile.h"
 #include "model/FieldTreeModel.h"
+#include "model/ResourceNames.h"
 #include "model/TechFields.h"
 
 namespace newage {
@@ -13,6 +14,27 @@ namespace {
 
 // Effect command type "disable tech"; D is the tech ID.
 constexpr int kDisableTech = 102;
+
+// Language name, else internal name, of unit `id` in `civ`. Empty when the slot
+// is unused or unnamed, so the view keeps the plain ID.
+QString unitName(const Session &session, int civ, int id)
+{
+    if (civ < 0 || id < 0)
+        return {};
+    const auto &civs = session.dat()->Civs;
+    if (civ >= static_cast<int>(civs.size()))
+        return {};
+    const genie::Civ &selected = civs[civ];
+    if (id >= static_cast<int>(selected.Units.size()) || id >= static_cast<int>(selected.UnitPointers.size())
+        || selected.UnitPointers[id] == 0)
+        return {};
+    const genie::Unit &unit = selected.Units[id];
+    if (const QString name = session.names().text(unit.LanguageDLLName); !name.isEmpty())
+        return name;
+    if (!unit.Name.empty())
+        return QString::fromLatin1(unit.Name);
+    return {};
+}
 
 } // namespace
 
@@ -100,7 +122,31 @@ void TechListModel::showFields(int row, FieldTreeModel &fields)
         entityEdited(row);
         return desc.get(target);
     };
-    fields.setObject(techFields(), TechRef{row, session()->dat()->Techs.at(row)}, &session()->names(), writer);
+    const auto refNamer = [this](RefKind kind, int id) {
+        switch (kind)
+        {
+        case RefKind::Tech: return name(id);
+        case RefKind::Resource: return resourceName(session()->gameVersion(), id);
+        case RefKind::Civ:
+        {
+            const auto &civs = session()->dat()->Civs;
+            if (id < 0 || id >= static_cast<int>(civs.size()) || civs[id].Name.empty())
+                return QString();
+            return QString::fromLatin1(civs[id].Name);
+        }
+        case RefKind::Effect:
+        {
+            const auto &effects = session()->dat()->Effects;
+            if (id < 0 || id >= static_cast<int>(effects.size()) || effects[id].Name.empty())
+                return QString();
+            return QString::fromLatin1(effects[id].Name);
+        }
+        case RefKind::Unit: return unitName(*session(), civ(), id);
+        default: return QString();
+        }
+    };
+    fields.setObject(techFields(), TechRef{row, session()->dat()->Techs.at(row)}, &session()->names(), writer,
+                     refNamer);
 }
 
 QVariant TechListModel::data(const QModelIndex &index, int role) const

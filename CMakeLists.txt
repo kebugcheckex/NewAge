@@ -44,6 +44,8 @@ add_library(newage_model STATIC
   src/model/FieldTreeModel.h
   src/model/ListFilterModel.cpp
   src/model/ListFilterModel.h
+  src/model/ResourceNames.cpp
+  src/model/ResourceNames.h
   src/model/TechFields.cpp
   src/model/TechFields.h
   src/model/TechListModel.cpp

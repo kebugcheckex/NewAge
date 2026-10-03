@@ -15,11 +15,12 @@ constexpr quintptr kGroupId = 0;
 
 FieldTreeModel::FieldTreeModel(QObject *parent) : QAbstractItemModel(parent) {}
 
-void FieldTreeModel::setRows(const QList<Row> &rows, Writer writer)
+void FieldTreeModel::setRows(const QList<Row> &rows, Writer writer, RefNamer refNamer)
 {
     beginResetModel();
     groups_.clear();
     writer_ = std::move(writer);
+    refNamer_ = std::move(refNamer);
     for (const Row &row : rows)
     {
         auto it = std::find_if(groups_.begin(), groups_.end(),
@@ -81,6 +82,8 @@ QVariant FieldTreeModel::data(const QModelIndex &index, int role) const
     {
         if (index.column() == NameColumn)
             return row.name;
+        if (!row.label.isEmpty())
+            return QStringLiteral("%1 (%2)").arg(row.label, displayText(row.value));
         if (row.note.isEmpty())
             return displayText(row.value);
         // Keep multi-line strings on one line in the tree.
@@ -139,6 +142,8 @@ bool FieldTreeModel::setData(const QModelIndex &index, const QVariant &value, in
     if (!stored.isValid())
         return false;
     row.value = stored;
+    if (row.ref != RefKind::None && refNamer_)
+        row.label = refNamer_(row.ref, stored.toInt());
     emit dataChanged(index, index);
     return true;
 }
