@@ -104,6 +104,52 @@ QJsonObject infoObject(const DataService &service, const DataSource &source)
     return body;
 }
 
+QString labelKindName(RefKind kind)
+{
+    switch (kind)
+    {
+    case RefKind::None: return {};
+    case RefKind::Tech: return QStringLiteral("tech");
+    case RefKind::Resource: return QStringLiteral("resource");
+    case RefKind::Civ: return QStringLiteral("civ");
+    case RefKind::Effect: return QStringLiteral("effect");
+    case RefKind::Unit: return QStringLiteral("unit");
+    case RefKind::UnitClass: return QStringLiteral("unit-class");
+    case RefKind::Attribute: return QStringLiteral("attribute");
+    case RefKind::UnitType: return QStringLiteral("unit-type");
+    case RefKind::TechType: return QStringLiteral("tech-type");
+    }
+    return {};
+}
+
+QJsonObject schemaObject(const EntityKind &kind, const Session &session)
+{
+    QJsonArray fields;
+    for (const FieldSchema &field : kind.schema(session))
+    {
+        QJsonObject item;
+        item.insert(QStringLiteral("key"), field.key);
+        item.insert(QStringLiteral("name"), field.name);
+        item.insert(QStringLiteral("group"), field.group);
+        item.insert(QStringLiteral("type"), field.type);
+        item.insert(QStringLiteral("editable"), field.editable);
+        if (field.conditional)
+            item.insert(QStringLiteral("conditional"), true);
+        if (field.minimum)
+            item.insert(QStringLiteral("min"), *field.minimum);
+        if (field.maximum)
+            item.insert(QStringLiteral("max"), *field.maximum);
+        if (field.labelKind != RefKind::None)
+            item.insert(QStringLiteral("labelKind"), labelKindName(field.labelKind));
+        fields.append(item);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("kind"), kind.key());
+    body.insert(QStringLiteral("perCiv"), kind.perCiv());
+    body.insert(QStringLiteral("fields"), fields);
+    return body;
+}
+
 } // namespace
 
 int exitCodeFor(const QString &code)
@@ -134,15 +180,40 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
     if (!opValue.isString() || opValue.toString().isEmpty())
         return usage(QStringLiteral("Missing op."));
     const QString op = opValue.toString();
-    if (op != QStringLiteral("info"))
+    if (op != QStringLiteral("info") && op != QStringLiteral("schema"))
         return usage(QStringLiteral("Unknown op \"%1\".").arg(op));
+
+    QString schemaKind;
+    if (op == QStringLiteral("schema"))
+    {
+        const QJsonValue kindValue = request.value(QStringLiteral("kind"));
+        if (!kindValue.isUndefined() && !kindValue.isString())
+            return usage(QStringLiteral("schema kind must be a string."));
+        schemaKind = kindValue.toString();
+        if (!schemaKind.isEmpty() && !findEntityKind(schemaKind))
+        {
+            ServiceError error = makeError(QStringLiteral("unknown_kind"),
+                                           QStringLiteral("Unknown kind \"%1\".").arg(schemaKind));
+            error.kind = schemaKind;
+            return failed(error);
+        }
+    }
 
     const DataSource resolved = resolveSource(source);
     DataService service;
     const OpenResult opened = service.open(resolved);
     if (!opened.ok)
         return failed(opened.error, opened.warnings);
-    return succeeded(infoObject(service, resolved), opened.warnings);
+    if (op == QStringLiteral("info"))
+        return succeeded(infoObject(service, resolved), opened.warnings);
+    if (!schemaKind.isEmpty())
+        return succeeded(schemaObject(*service.kind(schemaKind), service.session()), opened.warnings);
+    QJsonArray kinds;
+    for (const EntityKind *kind : service.kinds())
+        kinds.append(schemaObject(*kind, service.session()));
+    QJsonObject body;
+    body.insert(QStringLiteral("kinds"), kinds);
+    return succeeded(body, opened.warnings);
 }
 
 } // namespace newage

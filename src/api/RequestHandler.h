@@ -8,7 +8,7 @@
 
 namespace newage {
 
-// Maps an error code to the CLI exit status (docs/CLI.md, section 6.2).
+// Maps an error code to the CLI exit status (docs/cli.md, section 6.2).
 // An empty code is success. A code that isn't in the table is usage.
 int exitCodeFor(const QString &code);
 
@@ -23,13 +23,12 @@ struct HandlerResult
 };
 
 // Turns one JSON request into one JSON result. Every call reloads the data.
-// `request` is an op object (`{"op": "info"}` and, later, the fields that op
-// uses). Source options stay on `source`, not in the request, because a batch
+// `request` is an op object (`{"op": "info"}` or `{"op": "schema", "kind": "unit"}`).
+// Source options stay on `source`, not in the request, because a batch
 // shares one open. Empty game, dataset, mod and mods-folder fields are filled
 // from the environment before opening.
 //
-// Phase 1 reads start here. `info` is the first. Any other op is `usage` and
-// does not open the data.
+// Phase 1 reads start here. Unsupported ops are `usage` and do not open data.
 class RequestHandler
 {
 public:

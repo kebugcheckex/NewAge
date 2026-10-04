@@ -141,6 +141,10 @@ const QList<FieldDesc<Unit>> &unitFields()
         };
         for (FieldDesc<Unit> &field : list)
         {
+            if (field.key == QStringLiteral("internal_name"))
+                field.typeId = QMetaType::QString;
+            if (field.key.startsWith(QStringLiteral("collision_size_")))
+                field.typeId = QMetaType::Float;
             if (field.key == QStringLiteral("type"))
                 field.ref = RefKind::UnitType;
             if (field.key == QStringLiteral("class"))

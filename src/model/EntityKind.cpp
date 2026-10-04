@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include <QHash>
 #include <QSet>
 
 #include "core/Session.h"
@@ -48,6 +49,39 @@ QString fieldTypeName(const QVariant &value)
     default:
         return QStringLiteral("int");
     }
+}
+
+QString fieldTypeName(int typeId)
+{
+    if (typeId == QMetaType::Float || typeId == QMetaType::Double)
+        return QStringLiteral("float");
+    if (typeId == QMetaType::QString)
+        return QStringLiteral("string");
+    return QStringLiteral("int");
+}
+
+template <typename T>
+QList<FieldSchema> describe(const QList<FieldDesc<T>> &fields)
+{
+    QList<FieldSchema> rows;
+    for (const FieldDesc<T> &field : fields)
+    {
+        FieldSchema row;
+        row.key = field.key;
+        row.name = field.name;
+        row.group = field.group;
+        row.type = fieldTypeName(field.typeId);
+        row.editable = static_cast<bool>(field.set);
+        row.conditional = static_cast<bool>(field.applies);
+        if (row.editable && row.type == QLatin1String("int"))
+        {
+            row.minimum = field.minimum;
+            row.maximum = field.maximum;
+        }
+        row.labelKind = field.ref;
+        rows.append(row);
+    }
+    return rows;
 }
 
 QString labelOrUnnamed(const QString &name)
@@ -191,6 +225,7 @@ public:
     }
 
     QList<FieldValue> fields(const Session &, int, int) const override { return {}; }
+    QList<FieldSchema> schema(const Session &) const override { return {}; }
 
     SetResult set(Session &session, int civ, int id, const QString &key, const QVariant &, bool) override
     {
@@ -240,6 +275,8 @@ public:
             return {};
         return snapshot(unitFields(), session.dat()->Civs[civ].Units[id], session, civ);
     }
+
+    QList<FieldSchema> schema(const Session &) const override { return describe(unitFields()); }
 
     SetResult set(Session &session, int civ, int id, const QString &key, const QVariant &value, bool commit) override
     {
@@ -295,6 +332,8 @@ public:
         return snapshot(techFields(), ref, session, civ);
     }
 
+    QList<FieldSchema> schema(const Session &) const override { return describe(techFields()); }
+
     SetResult set(Session &session, int civ, int id, const QString &key, const QVariant &value, bool commit) override
     {
         if (id < 0 || id >= count(session, civ))
@@ -341,6 +380,38 @@ public:
         const genie::Effect &effect = session.dat()->Effects[id];
         EffectRef ref{id, session.dat()->Effects[id]};
         return snapshot(effectFields(effect, session.gameVersion()), ref, session, civ);
+    }
+
+    QList<FieldSchema> schema(const Session &session) const override
+    {
+        genie::Effect sample;
+        QList<FieldSchema> rows = describe(effectFields(sample, session.gameVersion()));
+        QHash<QString, qsizetype> indices;
+        // Effect command fields vary by type. Use one synthetic command per
+        // type, then expose its key as a commandN template.
+        for (int type = 0; type <= 103; ++type)
+        {
+            sample.EffectCommands.clear();
+            sample.EffectCommands.emplace_back();
+            sample.EffectCommands.front().Type = type;
+            for (FieldSchema row : describe(effectFields(sample, session.gameVersion())))
+            {
+                if (!row.key.startsWith(QStringLiteral("command1.")))
+                    continue;
+                row.key.replace(0, 8, QStringLiteral("commandN"));
+                row.group = QStringLiteral("Command N");
+                row.conditional = true;
+                const auto found = indices.constFind(row.key);
+                if (found == indices.cend())
+                {
+                    indices.insert(row.key, rows.size());
+                    rows.append(row);
+                }
+                else if (rows[*found].type != row.type && !rows[*found].type.split(QLatin1Char('|')).contains(row.type))
+                    rows[*found].type += QLatin1Char('|') + row.type;
+            }
+        }
+        return rows;
     }
 
     SetResult set(Session &session, int civ, int id, const QString &key, const QVariant &value, bool commit) override

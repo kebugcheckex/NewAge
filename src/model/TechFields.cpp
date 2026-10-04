@@ -121,6 +121,11 @@ const QList<FieldDesc<TechRef>> &techFields()
                                          [](auto &t) -> auto & { return t.tech.ResearchLocations.front().QueueTime; }));
         list.append({"button", "Button", location, hasLocation,
                      [](const TechRef &t) { return intValue(t.tech.ResearchLocations.front().ButtonID); }});
+        for (FieldDesc<TechRef> &field : list)
+        {
+            if (field.key == QStringLiteral("internal_name"))
+                field.typeId = QMetaType::QString;
+        }
         return list;
     }();
     return fields;

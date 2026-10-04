@@ -47,6 +47,20 @@ struct FieldValue
     QString text;
 };
 
+// Descriptor metadata, including fields absent from the current data.
+struct FieldSchema
+{
+    QString key;
+    QString name;
+    QString group;
+    QString type;
+    bool editable = false;
+    bool conditional = false;
+    std::optional<int> minimum;
+    std::optional<int> maximum;
+    RefKind labelKind = RefKind::None;
+};
+
 // Result of EntityKind::set. `ok` with `changed` false is a no-op: the value
 // was already stored, and the session was not marked modified.
 struct SetResult
@@ -79,6 +93,7 @@ public:
     virtual QString internalName(const Session &session, int civ, int id) const = 0;
     // Applicable fields, in descriptor order. Empty when the entity is missing.
     virtual QList<FieldValue> fields(const Session &session, int civ, int id) const = 0;
+    virtual QList<FieldSchema> schema(const Session &session) const = 0;
     // Parses, range-checks and, when `commit` is true, stores. Marks the
     // session modified when the stored value changes. `commit` false is the
     // check `DataService` runs on every edit before it changes anything.

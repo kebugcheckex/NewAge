@@ -2,7 +2,7 @@
 
 - **Do not hard-wrap Markdown.** Write each paragraph, list item and table row as one line and let the viewer wrap it. This holds for every `.md` in the repo, including this one.
 
-NewAge is a C++20 / Qt 6 Widgets editor for Genie engine game data (AoE, AoE II, SWGB), replacing a subset of Advanced Genie Editor. It currently browses units and techs, edits selected numeric fields, and saves `.dat` files; undo/redo and save-time format upgrades are not implemented. See `README.md` for setup and `docs/PLAN.md` for design and roadmap; the plan includes future work, so check the code before assuming a feature exists.
+NewAge is a C++20 / Qt 6 Widgets editor for Genie engine game data (AoE, AoE II, SWGB), replacing a subset of Advanced Genie Editor. It currently browses units and techs, edits selected numeric fields, and saves `.dat` files; undo/redo and save-time format upgrades are not implemented. See `README.md` for setup and `docs/plan.md` for design and roadmap; the plan includes future work, so check the code before assuming a feature exists.
 
 ## Architecture and conventions
 

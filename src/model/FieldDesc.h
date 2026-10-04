@@ -81,6 +81,8 @@ struct FieldDesc
     int maximum = 0;
     RefKind ref = RefKind::None;
     SpriteKind sprite = SpriteKind::None;
+    // Schema type, independent of whether a particular object has this field.
+    int typeId = QMetaType::Int;
 };
 
 // An editable field for a number member of T. `access` returns a reference to
@@ -109,6 +111,8 @@ FieldDesc<T> numberField(const QString &key, const QString &name, const QString 
         else
             access(object) = static_cast<Value>(value.toInt());
     };
+    if constexpr (std::is_same_v<Value, float>)
+        field.typeId = QMetaType::Float;
     if constexpr (std::is_integral_v<Value>)
     {
         field.minimum = std::numeric_limits<Value>::min();

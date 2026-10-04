@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` serves `info` (JSON request to JSON result, exit codes from section 6.2); `cli_test` drives it. The console executable and the other read commands are not built yet.
+Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info` and `schema` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The other read commands are not built yet.
 
 ## 1. Goal
 
@@ -165,6 +165,8 @@ newage-cli lookup resource                 # the whole table: 0 Food Storage, 1 
 - So "Modify the Spanish tech Supremacy" becomes: `lookup civ spanish` → 9, `list tech --owner-civ 9` or `lookup tech supremacy` → 440, `get tech 440`, then `set`. The IDs are illustrative; the real ones come from the data.
 
 **Field keys stay textual.** Fields have no natural number: a number would be the descriptor's position, which shifts whenever a field is added, and a wrong number would silently edit a different field. A mistyped key fails with `unknown_field`. `schema` lists every key with its display name and type.
+
+`schema` with no kind returns `{"kinds": [...]}` in registry order. With a kind it returns `{"kind": "unit", "perCiv": true, "fields": [...]}`. Each field has `key`, `name`, `group`, `type`, and `editable`; editable integers also have `min` and `max`. Reference fields have `labelKind`. A `conditional` field may be absent on a particular entity; use `get` to see the applicable fields. Effects have a variable number of commands, so their schema uses `commandN.*` templates, where `N` is a one-based command number. A type such as `int|float` means the stored type depends on the command type. Schema uses the selected source's game version and requires an open data source.
 
 ### 6.2 Output shapes
 

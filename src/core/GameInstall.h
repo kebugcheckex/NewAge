@@ -18,7 +18,7 @@ struct GameDataset
 };
 
 // Finds the data sets in a game installation folder by looking for the data
-// and language files of each known layout (see docs/PLAN.md, M2b). Newest
+// and language files of each known layout (see docs/plan.md, M2b). Newest
 // first; empty if the folder matches no layout. File names are matched
 // case-insensitively, since older games mix "data" and "Data".
 //

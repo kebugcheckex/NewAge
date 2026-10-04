@@ -125,6 +125,8 @@ void appendSlot(QList<FieldDesc<EffectRef>> &list, const QString &group, int com
         };
     }
     field.ref = ref;
+    if (slot == Slot::D)
+        field.typeId = QMetaType::Float;
     list.append(std::move(field));
 }
 
@@ -163,6 +165,7 @@ void appendMode(QList<FieldDesc<EffectRef>> &list, const QString &group, int com
                      }
                      return QVariant();
                  }});
+    list.last().typeId = QMetaType::QString;
 }
 
 void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, genie::GameVersion version)
@@ -172,6 +175,7 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
                  [command, version](const EffectRef &effect) {
                      return QVariant(effectTypeName(version, effect.effect.EffectCommands.at(command).Type));
                  }});
+    list.last().typeId = QMetaType::QString;
 
     if (!effectTypeKnown(version, type))
     {
@@ -265,6 +269,7 @@ QList<FieldDesc<EffectRef>> effectFields(const genie::Effect &effect, genie::Gam
         {"command_count", "Command count", general, {},
          [](const EffectRef &e) { return QVariant(static_cast<int>(e.effect.EffectCommands.size())); }},
     };
+    list[1].typeId = QMetaType::QString;
     for (int i = 0; i < static_cast<int>(effect.EffectCommands.size()); ++i)
         appendCommand(list, i, effect.EffectCommands[i].Type, version);
     return list;

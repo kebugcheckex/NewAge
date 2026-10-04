@@ -129,7 +129,13 @@ target_link_libraries(NewAge PRIVATE newage_ui)
 target_compile_definitions(NewAge PRIVATE NEWAGE_VERSION="${PROJECT_VERSION}")
 newage_deploy_qt_plugins(NewAge)
 
-foreach(target newage_core newage_model newage_api newage_ui NewAge)
+# --- console CLI --------------------------------------------------------------
+qt_add_executable(newage-cli
+  src/cli/main.cpp
+)
+target_link_libraries(newage-cli PRIVATE newage_api)
+
+foreach(target newage_core newage_model newage_api newage_ui NewAge newage-cli)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
   else()
