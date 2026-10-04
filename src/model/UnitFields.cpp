@@ -53,6 +53,13 @@ QString unitTypeName(int type)
     }
 }
 
+QList<int> unitTypeIds()
+{
+    return {genie::UT_EyeCandy, genie::UT_Trees, genie::UT_Flag, genie::UT_25,
+            genie::UT_Dead_Fish, genie::UT_Bird, genie::UT_Combatant, genie::UT_Projectile,
+            genie::UT_Creatable, genie::UT_Building, genie::UT_AoeTrees};
+}
+
 const QList<FieldDesc<Unit>> &unitFields()
 {
     static const QList<FieldDesc<Unit>> fields = [] {

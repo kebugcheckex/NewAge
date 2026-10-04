@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info` and `schema` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The other read commands are not built yet.
+Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup` and `list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. `get`, `batch` and `mods list` are not built yet.
 
 ## 1. Goal
 
@@ -133,6 +133,8 @@ newage-cli diff --against-game                     # phase 3: what the mod chang
 
 - Every argument that names an entity, a civ or a reference value is a number. Field keys are the one textual identifier (section 6.1).
 - `list` hides inactive rows (empty unit slots, techs the civ can't research) unless `--all`, mirroring the GUI options. `--owner-civ N` lists techs whose `Civ` is N, which is how "the Spanish techs" (unique techs and civ bonuses) are found.
+- `list unit` needs `--civ`. `list tech` takes an optional `--civ`: with it, techs that civ can't research are inactive; without it, no tech is hidden. `--owner-civ` (`-1` for techs any civ can research) is for techs only, and `civ` and `effect` take neither option. A civ or owner civ out of range is `unknown_entity` with kind `civ`.
+- `list` returns `{"kind", "civ"?, "ownerCiv"?, "all"?, "offset", "limit"?, "total", "items"}`. Items are in ID order with `id`, `name` and `internalName`; tech items also have `ownerCiv`. With `--all`, items whose activity is known (units, and techs when a civ is given) have `active`. `total` counts the rows that pass the filters, before `--offset` and `--limit`, so an agent can page. In a request the options are `civ`, `ownerCiv`, `all` (bool), `offset` and `limit` (non-negative ints).
 - `get` takes several IDs, so related entities come back in one call and one load.
 - `set` checks every assignment before changing anything and saves once. Writing the current value is reported as unchanged and doesn't count as an edit.
 - `--expect` is compare-and-set: if a current value differs from the expected one, nothing is written and the command fails with `conflict`. The skill tells agents to pass the values they read, so a change made in between (in the GUI, or by another agent) isn't silently lost.
@@ -162,6 +164,8 @@ newage-cli lookup resource                 # the whole table: 0 Food Storage, 1 
 - Tables: `civ`, `unit`, `tech`, `effect` (data) and `resource`, `unit-class`, `attribute`, `effect-type`, `unit-type`, `tech-type` (fixed lists from `ResourceNames`, `EffectNames` and friends).
 - Matching is case-insensitive on the language name and the internal name; exact matches first, then prefix, then substring. With no `TEXT`, the whole table is returned.
 - Civs have only internal names in the `.dat` (`Civ::Name`); civ language names are a later addition.
+- `unit` needs `--civ` (`"civ"` in a request) and leaves out empty unit slots; the other tables reject `--civ`. A civ out of range is `unknown_entity` with kind `civ`; an unknown table is `unknown_kind`.
+- Rows of data tables have `internalName`; tech rows also have `ownerCiv` (`Tech::Civ`, `-1` for any civ). Fixed-list rows have only `id` and `name`. With no `TEXT`, the result has no `query`, rows have no `match`, and rows are in ID order; with `TEXT`, rows are ordered by match quality, then ID. Unit results carry `civ`.
 - So "Modify the Spanish tech Supremacy" becomes: `lookup civ spanish` → 9, `list tech --owner-civ 9` or `lookup tech supremacy` → 440, `get tech 440`, then `set`. The IDs are illustrative; the real ones come from the data.
 
 **Field keys stay textual.** Fields have no natural number: a number would be the descriptor's position, which shifts whenever a field is added, and a wrong number would silently edit a different field. A mistyped key fails with `unknown_field`. `schema` lists every key with its display name and type.

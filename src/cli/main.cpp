@@ -18,6 +18,16 @@ void printJson(FILE *stream, const QJsonObject &object)
     std::fflush(stream);
 }
 
+// Reads an integer option into the request. False when the value isn't one.
+bool insertInt(QJsonObject &request, const QString &key, const QString &value)
+{
+    bool ok = false;
+    const int number = value.toInt(&ok);
+    if (ok)
+        request.insert(key, number);
+    return ok;
+}
+
 int usage(const QString &message)
 {
     QJsonObject error;
@@ -84,19 +94,55 @@ int main(int argc, char *argv[])
                                      QStringLiteral("KEY"));
     const QCommandLineOption locale(QStringLiteral("locale"), QStringLiteral("Language folder (default: en)."),
                                     QStringLiteral("CODE"));
-    for (const QCommandLineOption &option : {game, dataset, mod, modsFolder, dat, version, locale})
+    const QCommandLineOption civ(QStringLiteral("civ"), QStringLiteral("Civ ID for per-civ data."),
+                                 QStringLiteral("N"));
+    const QCommandLineOption ownerCiv(QStringLiteral("owner-civ"), QStringLiteral("List techs owned by this civ."),
+                                      QStringLiteral("N"));
+    const QCommandLineOption all(QStringLiteral("all"), QStringLiteral("List inactive entities too."));
+    const QCommandLineOption limit(QStringLiteral("limit"), QStringLiteral("At most N rows."), QStringLiteral("N"));
+    const QCommandLineOption offset(QStringLiteral("offset"), QStringLiteral("Skip the first N rows."),
+                                    QStringLiteral("N"));
+    for (const QCommandLineOption &option :
+         {game, dataset, mod, modsFolder, dat, version, locale, civ, ownerCiv, all, limit, offset})
         parser.addOption(option);
 
     if (!parser.parse(app.arguments()))
         return usage(parser.errorText());
 
     const QStringList positional = parser.positionalArguments();
-    if (positional.isEmpty() || positional.size() > 2)
-        return usage(QStringLiteral("Expected info or schema [kind]."));
-    if (positional.first() == QStringLiteral("info") && positional.size() != 1)
-        return usage(QStringLiteral("info takes no arguments."));
-    if (positional.first() != QStringLiteral("schema") && positional.size() != 1)
-        return usage(QStringLiteral("Unexpected command argument."));
+    const QString command = positional.value(0);
+    if (command == QStringLiteral("info"))
+    {
+        if (positional.size() != 1)
+            return usage(QStringLiteral("info takes no arguments."));
+    }
+    else if (command == QStringLiteral("schema"))
+    {
+        if (positional.size() > 2)
+            return usage(QStringLiteral("Expected schema [kind]."));
+    }
+    else if (command == QStringLiteral("lookup"))
+    {
+        if (positional.size() < 2 || positional.size() > 3)
+            return usage(QStringLiteral("Expected lookup <table> [TEXT]."));
+    }
+    else if (command == QStringLiteral("list"))
+    {
+        if (positional.size() != 2)
+            return usage(QStringLiteral("Expected list <kind>."));
+    }
+    else
+    {
+        return usage(QStringLiteral("Expected info, schema [kind], lookup <table> [TEXT] or list <kind>."));
+    }
+    const bool lists = command == QStringLiteral("list");
+    if (parser.isSet(civ) && command != QStringLiteral("lookup") && !lists)
+        return usage(QStringLiteral("--civ is not used by %1.").arg(command));
+    for (const QCommandLineOption &option : {ownerCiv, all, limit, offset})
+    {
+        if (parser.isSet(option) && !lists)
+            return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), command));
+    }
     if (parser.isSet(dat) && (parser.isSet(game) || parser.isSet(dataset)))
         return usage(QStringLiteral("--dat cannot be combined with --game or --dataset."));
     if (parser.isSet(dat) != parser.isSet(version))
@@ -113,9 +159,29 @@ int main(int argc, char *argv[])
         source.locale = parser.value(locale);
 
     QJsonObject request;
-    request.insert(QStringLiteral("op"), positional.first());
-    if (positional.first() == QStringLiteral("schema") && positional.size() == 2)
+    request.insert(QStringLiteral("op"), command);
+    if (command == QStringLiteral("schema") && positional.size() == 2)
         request.insert(QStringLiteral("kind"), positional.at(1));
+    if (command == QStringLiteral("lookup"))
+    {
+        request.insert(QStringLiteral("table"), positional.at(1));
+        if (positional.size() == 3)
+            request.insert(QStringLiteral("text"), positional.at(2));
+    }
+    if (lists)
+    {
+        request.insert(QStringLiteral("kind"), positional.at(1));
+        if (parser.isSet(all))
+            request.insert(QStringLiteral("all"), true);
+    }
+    if (parser.isSet(civ) && !insertInt(request, QStringLiteral("civ"), parser.value(civ)))
+        return usage(QStringLiteral("--civ needs an integer."));
+    if (parser.isSet(ownerCiv) && !insertInt(request, QStringLiteral("ownerCiv"), parser.value(ownerCiv)))
+        return usage(QStringLiteral("--owner-civ needs an integer."));
+    if (parser.isSet(limit) && !insertInt(request, QStringLiteral("limit"), parser.value(limit)))
+        return usage(QStringLiteral("--limit needs an integer."));
+    if (parser.isSet(offset) && !insertInt(request, QStringLiteral("offset"), parser.value(offset)))
+        return usage(QStringLiteral("--offset needs an integer."));
     newage::HandlerResult result;
     QStringList libraryOutput;
     {

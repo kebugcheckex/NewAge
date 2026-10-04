@@ -1,5 +1,8 @@
 #include "api/RequestHandler.h"
 
+#include <cmath>
+#include <limits>
+
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -150,6 +153,84 @@ QJsonObject schemaObject(const EntityKind &kind, const Session &session)
     return body;
 }
 
+QJsonObject lookupObject(const QString &table, const QString &text, int civ, const LookupResult &lookup)
+{
+    QJsonArray matches;
+    for (const LookupMatch &match : lookup.matches)
+    {
+        QJsonObject item;
+        item.insert(QStringLiteral("id"), match.id);
+        item.insert(QStringLiteral("name"), match.name);
+        if (match.internalName)
+            item.insert(QStringLiteral("internalName"), *match.internalName);
+        if (match.ownerCiv)
+            item.insert(QStringLiteral("ownerCiv"), *match.ownerCiv);
+        if (!match.match.isEmpty())
+            item.insert(QStringLiteral("match"), match.match);
+        matches.append(item);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("table"), table);
+    if (!text.isEmpty())
+        body.insert(QStringLiteral("query"), text);
+    if (civ >= 0)
+        body.insert(QStringLiteral("civ"), civ);
+    body.insert(QStringLiteral("matches"), matches);
+    return body;
+}
+
+QJsonObject listObject(const ListQuery &query, const ListResult &list)
+{
+    QJsonArray items;
+    for (const ListRow &row : list.rows)
+    {
+        QJsonObject item;
+        item.insert(QStringLiteral("id"), row.id);
+        item.insert(QStringLiteral("name"), row.name);
+        item.insert(QStringLiteral("internalName"), row.internalName);
+        if (row.ownerCiv)
+            item.insert(QStringLiteral("ownerCiv"), *row.ownerCiv);
+        // Without `all` every row is active, so the flag would say nothing.
+        if (query.all && row.active)
+            item.insert(QStringLiteral("active"), *row.active);
+        items.append(item);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("kind"), query.kind);
+    if (query.civ >= 0)
+        body.insert(QStringLiteral("civ"), query.civ);
+    if (query.ownerCiv)
+        body.insert(QStringLiteral("ownerCiv"), *query.ownerCiv);
+    if (query.all)
+        body.insert(QStringLiteral("all"), true);
+    body.insert(QStringLiteral("offset"), query.offset);
+    if (query.limit >= 0)
+        body.insert(QStringLiteral("limit"), query.limit);
+    body.insert(QStringLiteral("total"), list.total);
+    body.insert(QStringLiteral("items"), items);
+    return body;
+}
+
+// A JSON number that is a whole int.
+bool readInt(const QJsonValue &value, int &out)
+{
+    if (!value.isDouble())
+        return false;
+    const double number = value.toDouble();
+    if (number != std::floor(number) || number < std::numeric_limits<int>::min()
+        || number > std::numeric_limits<int>::max())
+        return false;
+    out = static_cast<int>(number);
+    return true;
+}
+
+ServiceError unknownKind(const QString &kind, const QString &message)
+{
+    ServiceError error = makeError(QStringLiteral("unknown_kind"), message);
+    error.kind = kind;
+    return error;
+}
+
 } // namespace
 
 int exitCodeFor(const QString &code)
@@ -180,9 +261,11 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
     if (!opValue.isString() || opValue.toString().isEmpty())
         return usage(QStringLiteral("Missing op."));
     const QString op = opValue.toString();
-    if (op != QStringLiteral("info") && op != QStringLiteral("schema"))
+    if (op != QStringLiteral("info") && op != QStringLiteral("schema") && op != QStringLiteral("lookup")
+        && op != QStringLiteral("list"))
         return usage(QStringLiteral("Unknown op \"%1\".").arg(op));
 
+    // Check the request before opening, so a malformed one fails fast.
     QString schemaKind;
     if (op == QStringLiteral("schema"))
     {
@@ -191,12 +274,90 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
             return usage(QStringLiteral("schema kind must be a string."));
         schemaKind = kindValue.toString();
         if (!schemaKind.isEmpty() && !findEntityKind(schemaKind))
+            return failed(unknownKind(schemaKind, QStringLiteral("Unknown kind \"%1\".").arg(schemaKind)));
+    }
+
+    QString table;
+    QString text;
+    int civ = -1;
+    if (op == QStringLiteral("lookup"))
+    {
+        const QJsonValue tableValue = request.value(QStringLiteral("table"));
+        if (!tableValue.isString() || tableValue.toString().isEmpty())
+            return usage(QStringLiteral("lookup needs a table."));
+        table = tableValue.toString();
+        if (!lookupTables().contains(table))
+            return failed(unknownKind(table, QStringLiteral("Unknown lookup table \"%1\".").arg(table)));
+        const QJsonValue textValue = request.value(QStringLiteral("text"));
+        if (!textValue.isUndefined() && !textValue.isString())
+            return usage(QStringLiteral("lookup text must be a string."));
+        text = textValue.toString().trimmed();
+        const EntityKind *kind = findEntityKind(table);
+        const bool perCiv = kind && kind->perCiv();
+        const QJsonValue civValue = request.value(QStringLiteral("civ"));
+        if (civValue.isUndefined())
         {
-            ServiceError error = makeError(QStringLiteral("unknown_kind"),
-                                           QStringLiteral("Unknown kind \"%1\".").arg(schemaKind));
-            error.kind = schemaKind;
-            return failed(error);
+            if (perCiv)
+                return usage(QStringLiteral("lookup %1 needs a civ.").arg(table));
         }
+        else
+        {
+            if (!perCiv)
+                return usage(QStringLiteral("lookup %1 takes no civ.").arg(table));
+            if (!readInt(civValue, civ))
+                return usage(QStringLiteral("civ must be an integer."));
+        }
+    }
+
+    ListQuery listQuery;
+    if (op == QStringLiteral("list"))
+    {
+        const QJsonValue kindValue = request.value(QStringLiteral("kind"));
+        if (!kindValue.isString() || kindValue.toString().isEmpty())
+            return usage(QStringLiteral("list needs a kind."));
+        listQuery.kind = kindValue.toString();
+        const EntityKind *kind = findEntityKind(listQuery.kind);
+        if (!kind)
+            return failed(unknownKind(listQuery.kind, QStringLiteral("Unknown kind \"%1\".").arg(listQuery.kind)));
+        const bool isTech = kind == &techKind();
+
+        // Units need a civ; techs take one to judge availability.
+        const QJsonValue civValue = request.value(QStringLiteral("civ"));
+        if (civValue.isUndefined())
+        {
+            if (kind->perCiv())
+                return usage(QStringLiteral("list %1 needs a civ.").arg(listQuery.kind));
+        }
+        else
+        {
+            if (!kind->perCiv() && !isTech)
+                return usage(QStringLiteral("list %1 takes no civ.").arg(listQuery.kind));
+            if (!readInt(civValue, listQuery.civ))
+                return usage(QStringLiteral("civ must be an integer."));
+        }
+
+        const QJsonValue ownerValue = request.value(QStringLiteral("ownerCiv"));
+        if (!ownerValue.isUndefined())
+        {
+            if (!isTech)
+                return usage(QStringLiteral("list %1 takes no ownerCiv.").arg(listQuery.kind));
+            int owner = -1;
+            if (!readInt(ownerValue, owner))
+                return usage(QStringLiteral("ownerCiv must be an integer."));
+            listQuery.ownerCiv = owner;
+        }
+
+        const QJsonValue allValue = request.value(QStringLiteral("all"));
+        if (!allValue.isUndefined() && !allValue.isBool())
+            return usage(QStringLiteral("all must be true or false."));
+        listQuery.all = allValue.toBool();
+
+        const QJsonValue offsetValue = request.value(QStringLiteral("offset"));
+        if (!offsetValue.isUndefined() && (!readInt(offsetValue, listQuery.offset) || listQuery.offset < 0))
+            return usage(QStringLiteral("offset must be a non-negative integer."));
+        const QJsonValue limitValue = request.value(QStringLiteral("limit"));
+        if (!limitValue.isUndefined() && (!readInt(limitValue, listQuery.limit) || listQuery.limit < 0))
+            return usage(QStringLiteral("limit must be a non-negative integer."));
     }
 
     const DataSource resolved = resolveSource(source);
@@ -206,6 +367,20 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
         return failed(opened.error, opened.warnings);
     if (op == QStringLiteral("info"))
         return succeeded(infoObject(service, resolved), opened.warnings);
+    if (op == QStringLiteral("lookup"))
+    {
+        const LookupResult lookup = service.lookup(table, text, civ);
+        if (!lookup.ok)
+            return failed(lookup.error, opened.warnings);
+        return succeeded(lookupObject(table, text, civ, lookup), opened.warnings);
+    }
+    if (op == QStringLiteral("list"))
+    {
+        const ListResult list = service.list(listQuery);
+        if (!list.ok)
+            return failed(list.error, opened.warnings);
+        return succeeded(listObject(listQuery, list), opened.warnings);
+    }
     if (!schemaKind.isEmpty())
         return succeeded(schemaObject(*service.kind(schemaKind), service.session()), opened.warnings);
     QJsonArray kinds;

@@ -259,6 +259,17 @@ QString effectTypeName(genie::GameVersion version, int type)
     return QStringLiteral("%1 - %2%3").arg(type).arg(scopePrefix(type), baseName(commandBase(type)));
 }
 
+QList<int> effectTypeIds(genie::GameVersion version)
+{
+    QList<int> ids;
+    for (int type = 0; type <= 103; ++type)
+    {
+        if (effectTypeKnown(version, type))
+            ids.append(type);
+    }
+    return ids;
+}
+
 QList<FieldDesc<EffectRef>> effectFields(const genie::Effect &effect, genie::GameVersion version)
 {
     const QString general = QStringLiteral("General");

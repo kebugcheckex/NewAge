@@ -71,6 +71,63 @@ struct ServiceError
     QVariant value;
 };
 
+// One `lookup` row. `internalName` is set for tables of entities in the data,
+// `ownerCiv` for techs (Tech::Civ, -1 for any civ). `match` is "exact",
+// "prefix" or "substring", and empty when the lookup had no text.
+struct LookupMatch
+{
+    int id = -1;
+    QString name;
+    std::optional<QString> internalName;
+    std::optional<int> ownerCiv;
+    QString match;
+};
+
+struct LookupResult
+{
+    bool ok = false;
+    ServiceError error;
+    QList<LookupMatch> matches;
+};
+
+// Tables `lookup` accepts: the entity kinds in registry order, then the fixed
+// lists (resource, unit-class, attribute, effect-type, unit-type, tech-type).
+QStringList lookupTables();
+
+// What `list` returns. `civ` selects the unit copy (required for units) and,
+// for techs, which civ's availability decides whether a tech is active; other
+// kinds take no civ. `ownerCiv` keeps techs whose Tech::Civ equals it. `all`
+// keeps inactive rows. `limit` -1 means no limit.
+struct ListQuery
+{
+    QString kind;
+    int civ = -1;
+    std::optional<int> ownerCiv;
+    bool all = false;
+    int offset = 0;
+    int limit = -1;
+};
+
+// One `list` row. `ownerCiv` is set for techs. `active` is set when the
+// entity's activity is known: always for units, for techs when a civ is given.
+struct ListRow
+{
+    int id = -1;
+    QString name;
+    QString internalName;
+    std::optional<int> ownerCiv;
+    std::optional<bool> active;
+};
+
+// `total` counts the rows that pass the filters, before offset and limit.
+struct ListResult
+{
+    bool ok = false;
+    ServiceError error;
+    int total = 0;
+    QList<ListRow> rows;
+};
+
 struct OpenResult
 {
     bool ok = false;
@@ -114,6 +171,19 @@ public:
 
     QList<EntityKind *> kinds() const { return entityKinds(); }
     EntityKind *kind(const QString &key) const { return findEntityKind(key); }
+
+    // Rows of `table` whose name or internal name contains `text`, ignoring
+    // case: exact matches first, then prefixes, then substrings, each by ID.
+    // Empty text returns the whole table, by ID. `civ` selects the unit copy;
+    // empty unit slots are left out. A civ out of range is unknown_entity, an
+    // unknown table unknown_kind.
+    LookupResult lookup(const QString &table, const QString &text, int civ = -1) const;
+
+    // Entities of one kind in ID order, filtered as `query` says, then paged.
+    // Inactive rows (empty unit slots, techs the civ can't research) are left
+    // out unless `query.all`. A civ or owner civ out of range is
+    // unknown_entity; an unknown kind is unknown_kind.
+    ListResult list(const ListQuery &query) const;
 
     // Checks every edit against the loaded data, then stores the ones that
     // change a value, then saves once. A failed check writes nothing. A dry

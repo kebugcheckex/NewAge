@@ -1,10 +1,15 @@
 #include "api/DataService.h"
 
+#include <algorithm>
+
 #include <QDir>
 #include <QFileInfo>
 
 #include "core/Mods.h"
 #include "core/VersionProfile.h"
+#include "genie/dat/DatFile.h"
+#include "model/EffectFields.h"
+#include "model/RefNames.h"
 
 namespace newage {
 
@@ -80,7 +85,84 @@ const GameDataset *selectDataset(const QList<GameDataset> &datasets, const QStri
     return nullptr;
 }
 
+struct FixedTable
+{
+    QLatin1StringView key;
+    RefKind kind;
+};
+
+// Fixed lists that lookup serves. "effect-type" has no RefKind: effect command
+// types are not reference fields.
+constexpr FixedTable kFixedTables[] = {
+    {QLatin1StringView("resource"), RefKind::Resource},
+    {QLatin1StringView("unit-class"), RefKind::UnitClass},
+    {QLatin1StringView("attribute"), RefKind::Attribute},
+    {QLatin1StringView("effect-type"), RefKind::None},
+    {QLatin1StringView("unit-type"), RefKind::UnitType},
+    {QLatin1StringView("tech-type"), RefKind::TechType},
+};
+
+const FixedTable *findFixedTable(const QString &key)
+{
+    for (const FixedTable &table : kFixedTables)
+    {
+        if (table.key == key)
+            return &table;
+    }
+    return nullptr;
+}
+
+// "exact", "prefix" or "substring" for the best of `names`, or empty.
+QString matchQuality(const QString &text, const QStringList &names)
+{
+    QString best;
+    for (const QString &name : names)
+    {
+        if (name.compare(text, Qt::CaseInsensitive) == 0)
+            return QStringLiteral("exact");
+        if (name.startsWith(text, Qt::CaseInsensitive))
+            best = QStringLiteral("prefix");
+        else if (best.isEmpty() && name.contains(text, Qt::CaseInsensitive))
+            best = QStringLiteral("substring");
+    }
+    return best;
+}
+
+int matchRank(const QString &match)
+{
+    if (match == QLatin1String("exact"))
+        return 0;
+    if (match == QLatin1String("prefix"))
+        return 1;
+    return 2;
+}
+
+ServiceError unknownKind(const QString &kind, const QString &message)
+{
+    ServiceError error = makeError(QStringLiteral("unknown_kind"), message);
+    error.kind = kind;
+    return error;
+}
+
+ServiceError unknownCiv(int civ)
+{
+    ServiceError error = makeError(QStringLiteral("unknown_entity"), QStringLiteral("No civ %1.").arg(civ));
+    error.kind = civKind().key();
+    error.id = civ;
+    return error;
+}
+
 } // namespace
+
+QStringList lookupTables()
+{
+    QStringList tables;
+    for (const EntityKind *kind : entityKinds())
+        tables.append(kind->key());
+    for (const FixedTable &table : kFixedTables)
+        tables.append(QString(table.key));
+    return tables;
+}
 
 DataSource resolveSource(DataSource source)
 {
@@ -180,6 +262,144 @@ OpenResult DataService::open(const DataSource &source)
     OpenResult result;
     result.ok = true;
     result.warnings = warnings_;
+    return result;
+}
+
+LookupResult DataService::lookup(const QString &table, const QString &text, int civ) const
+{
+    LookupResult result;
+    const EntityKind *kind = findEntityKind(table);
+    const FixedTable *fixed = findFixedTable(table);
+    if (!kind && !fixed)
+    {
+        result.error = unknownKind(table, QStringLiteral("Unknown lookup table \"%1\".").arg(table));
+        return result;
+    }
+    if (kind && kind->perCiv() && (civ < 0 || civ >= civKind().count(session_, 0)))
+    {
+        result.error = unknownCiv(civ);
+        return result;
+    }
+
+    QList<LookupMatch> rows;
+    if (kind)
+    {
+        const int count = kind->count(session_, civ);
+        for (int id = 0; id < count; ++id)
+        {
+            if (kind->perCiv() && !kind->isActive(session_, civ, id))
+                continue;
+            LookupMatch row;
+            row.id = id;
+            row.name = kind->name(session_, civ, id);
+            row.internalName = kind->internalName(session_, civ, id);
+            if (kind == &techKind())
+                row.ownerCiv = session_.dat()->Techs[id].Civ;
+            rows.append(row);
+        }
+    }
+    else
+    {
+        const genie::GameVersion version = session_.gameVersion();
+        if (fixed->kind == RefKind::None)
+        {
+            for (int type : effectTypeIds(version))
+            {
+                // effectTypeName is "102 - Disable Tech"; the ID is reported apart.
+                const QString label = effectTypeName(version, type);
+                rows.append({type, label.mid(label.indexOf(QLatin1String(" - ")) + 3), {}, {}, {}});
+            }
+        }
+        else
+        {
+            for (int id : fixedRefIds(version, fixed->kind))
+                rows.append({id, refName(session_, fixed->kind, id, -1), {}, {}, {}});
+        }
+    }
+
+    const QString query = text.trimmed();
+    if (query.isEmpty())
+    {
+        result.ok = true;
+        result.matches = rows;
+        return result;
+    }
+    for (LookupMatch &row : rows)
+    {
+        // "(unnamed)" is the label of an entity with neither name, not a name.
+        QStringList candidates;
+        const QString internal = row.internalName.value_or(QString());
+        if (!internal.isEmpty())
+            candidates.append(internal);
+        if (!internal.isEmpty() || row.name != QLatin1String("(unnamed)"))
+            candidates.append(row.name);
+        row.match = matchQuality(query, candidates);
+        if (!row.match.isEmpty())
+            result.matches.append(row);
+    }
+    std::stable_sort(result.matches.begin(), result.matches.end(), [](const LookupMatch &a, const LookupMatch &b) {
+        return matchRank(a.match) < matchRank(b.match);
+    });
+    result.ok = true;
+    return result;
+}
+
+ListResult DataService::list(const ListQuery &query) const
+{
+    ListResult result;
+    const EntityKind *kind = findEntityKind(query.kind);
+    if (!kind)
+    {
+        result.error = unknownKind(query.kind, QStringLiteral("Unknown kind \"%1\".").arg(query.kind));
+        return result;
+    }
+    const int civs = civKind().count(session_, 0);
+    const bool isTech = kind == &techKind();
+    if ((kind->perCiv() || (isTech && query.civ != -1)) && (query.civ < 0 || query.civ >= civs))
+    {
+        result.error = unknownCiv(query.civ);
+        return result;
+    }
+    if (query.ownerCiv && (*query.ownerCiv < -1 || *query.ownerCiv >= civs))
+    {
+        result.error = unknownCiv(*query.ownerCiv);
+        return result;
+    }
+
+    // Tech availability is computed once; isActive would recompute the civ's
+    // tech tree for every tech.
+    QList<TechAvailability> availability;
+    if (isTech && query.civ >= 0)
+        availability = techAvailability(session_, query.civ);
+
+    const int count = kind->count(session_, query.civ);
+    for (int id = 0; id < count; ++id)
+    {
+        ListRow row;
+        row.id = id;
+        if (isTech)
+        {
+            row.ownerCiv = session_.dat()->Techs[id].Civ;
+            if (query.ownerCiv && *row.ownerCiv != *query.ownerCiv)
+                continue;
+            if (!availability.isEmpty())
+                row.active = availability.at(id) == TechAvailability::Available;
+        }
+        else if (kind->perCiv())
+        {
+            row.active = kind->isActive(session_, query.civ, id);
+        }
+        if (row.active && !*row.active && !query.all)
+            continue;
+
+        ++result.total;
+        if (result.total <= query.offset || (query.limit >= 0 && result.rows.size() >= query.limit))
+            continue;
+        row.name = kind->name(session_, query.civ, id);
+        row.internalName = kind->internalName(session_, query.civ, id);
+        result.rows.append(row);
+    }
+    result.ok = true;
     return result;
 }
 

@@ -33,4 +33,8 @@ QList<FieldDesc<EffectRef>> effectFields(const genie::Effect &effect, genie::Gam
 // version-inappropriate types are "%1 - Unknown".
 QString effectTypeName(genie::GameVersion version, int type);
 
+// The effect command Types `version` knows, ascending: those effectTypeName()
+// doesn't call unknown.
+QList<int> effectTypeIds(genie::GameVersion version);
+
 } // namespace newage

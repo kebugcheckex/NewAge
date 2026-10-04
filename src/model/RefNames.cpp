@@ -77,4 +77,36 @@ QString refName(const Session &session, RefKind kind, int id, int civ)
     return {};
 }
 
+QList<int> fixedRefIds(genie::GameVersion version, RefKind kind)
+{
+    QList<int> ids;
+    switch (kind)
+    {
+    case RefKind::Resource:
+        for (int id = 0; id < resourceNames(version).size(); ++id)
+            ids.append(id);
+        break;
+    case RefKind::UnitClass:
+        for (int id = 0; id < unitClassCount(version); ++id)
+            ids.append(id);
+        break;
+    case RefKind::Attribute:
+        ids = effectAttributeIds(version);
+        break;
+    case RefKind::UnitType:
+        ids = unitTypeIds();
+        break;
+    case RefKind::TechType:
+        ids = techTypeIds();
+        break;
+    case RefKind::None:
+    case RefKind::Tech:
+    case RefKind::Civ:
+    case RefKind::Effect:
+    case RefKind::Unit:
+        break;
+    }
+    return ids;
+}
+
 } // namespace newage

@@ -30,6 +30,11 @@ QString techTypeName(int type)
     }
 }
 
+QList<int> techTypeIds()
+{
+    return {0, 2};
+}
+
 const QList<FieldDesc<TechRef>> &techFields()
 {
     static const QList<FieldDesc<TechRef>> fields = [] {

@@ -23,7 +23,10 @@ struct HandlerResult
 };
 
 // Turns one JSON request into one JSON result. Every call reloads the data.
-// `request` is an op object (`{"op": "info"}` or `{"op": "schema", "kind": "unit"}`).
+// `request` is an op object: `{"op": "info"}`, `{"op": "schema", "kind": "unit"}`,
+// `{"op": "lookup", "table": "unit", "text": "archer", "civ": 1}` or
+// `{"op": "list", "kind": "tech", "civ": 1, "ownerCiv": 9, "all": true,
+// "offset": 0, "limit": 50}`.
 // Source options stay on `source`, not in the request, because a batch
 // shares one open. Empty game, dataset, mod and mods-folder fields are filled
 // from the environment before opening.

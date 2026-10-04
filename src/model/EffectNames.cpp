@@ -1,5 +1,7 @@
 #include "model/EffectNames.h"
 
+#include <algorithm>
+
 #include <QHash>
 #include <QStringList>
 
@@ -309,9 +311,21 @@ QString unitClassName(genie::GameVersion version, int id)
     return id >= 0 && id < names.size() ? names.at(id) : QString();
 }
 
+int unitClassCount(genie::GameVersion version)
+{
+    return static_cast<int>(unitClassNames(version).size());
+}
+
 QString effectAttributeName(genie::GameVersion version, int id)
 {
     return effectAttributeNames(version).value(id);
+}
+
+QList<int> effectAttributeIds(genie::GameVersion version)
+{
+    QList<int> ids = effectAttributeNames(version).keys();
+    std::sort(ids.begin(), ids.end());
+    return ids;
 }
 
 } // namespace newage

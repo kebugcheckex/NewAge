@@ -19,4 +19,7 @@ const QList<FieldDesc<genie::Unit>> &unitFields();
 // show it as "70 - Combatant".
 QString unitTypeName(int type);
 
+// The unit Type values unitTypeName() names, ascending.
+QList<int> unitTypeIds();
+
 } // namespace newage

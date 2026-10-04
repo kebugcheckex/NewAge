@@ -28,4 +28,7 @@ const QList<FieldDesc<TechRef>> &techFields();
 // "2 - Age".
 QString techTypeName(int type);
 
+// The tech Type values techTypeName() names, ascending.
+QList<int> techTypeIds();
+
 } // namespace newage
