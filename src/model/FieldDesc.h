@@ -25,6 +25,11 @@ enum class RefKind
     Effect,
     // An index into the current civ's units. -1 is not a unit.
     Unit,
+    // Unit::Class, and an effect command's class slot. -1 is not a class.
+    UnitClass,
+    // An effect-command attribute index (hit points, line of sight, ...).
+    // -1 is not an attribute.
+    Attribute,
 };
 
 // An int field that is a frame index in a game sprite. The view may preview

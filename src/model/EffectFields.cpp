@@ -104,12 +104,20 @@ QVariant slotValue(const EffectRef &effect, int command, Slot slot)
     return {};
 }
 
+// `omitUnused` drops the row when the slot is still the unused value -1.
+// Amount and Modify Tech's Action pass false: -1 is a real value there.
 void appendSlot(QList<FieldDesc<EffectRef>> &list, const QString &group, int command, const QString &name, Slot slot,
-                RefKind ref = RefKind::None)
+                RefKind ref = RefKind::None, bool omitUnused = true)
 {
     FieldDesc<EffectRef> field{name, group, {}, [command, slot](const EffectRef &effect) {
                                   return slotValue(effect, command, slot);
                               }};
+    if (omitUnused)
+    {
+        field.applies = [command, slot](const EffectRef &effect) {
+            return slotValue(effect, command, slot).toInt() >= 0;
+        };
+    }
     field.ref = ref;
     list.append(std::move(field));
 }
@@ -121,6 +129,9 @@ void appendTechId(QList<FieldDesc<EffectRef>> &list, const QString &group, int c
                                   const float id = effect.effect.EffectCommands.at(command).D;
                                   return QVariant(static_cast<int>(std::lround(id)));
                               }};
+    field.applies = [command](const EffectRef &effect) {
+        return std::lround(effect.effect.EffectCommands.at(command).D) >= 0;
+    };
     field.ref = RefKind::Tech;
     list.append(std::move(field));
 }
@@ -158,7 +169,7 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
         appendSlot(list, group, command, QStringLiteral("A"), Slot::A);
         appendSlot(list, group, command, QStringLiteral("B"), Slot::B);
         appendSlot(list, group, command, QStringLiteral("C"), Slot::C);
-        appendSlot(list, group, command, QStringLiteral("D"), Slot::D);
+        appendSlot(list, group, command, QStringLiteral("D"), Slot::D, RefKind::None, false);
         return;
     }
 
@@ -168,16 +179,16 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
     case 4:
     case 5:
         appendSlot(list, group, command, QStringLiteral("Unit"), Slot::A, RefKind::Unit);
-        appendSlot(list, group, command, QStringLiteral("Class"), Slot::B);
-        appendSlot(list, group, command, QStringLiteral("Attribute"), Slot::C);
-        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D);
+        appendSlot(list, group, command, QStringLiteral("Class"), Slot::B, RefKind::UnitClass);
+        appendSlot(list, group, command, QStringLiteral("Attribute"), Slot::C, RefKind::Attribute);
+        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D, RefKind::None, false);
         break;
     case 1:
         appendSlot(list, group, command, QStringLiteral("Resource"), Slot::A, RefKind::Resource);
         appendMode(list, group, command, Slot::B, ModeKind::SetOrAdd);
         if (isAoE2DE(version))
             appendSlot(list, group, command, QStringLiteral("Multiply resource"), Slot::C, RefKind::Resource);
-        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D);
+        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D, RefKind::None, false);
         break;
     case 2:
         appendSlot(list, group, command, QStringLiteral("Unit"), Slot::A, RefKind::Unit);
@@ -191,23 +202,23 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
         break;
     case 6:
         appendSlot(list, group, command, QStringLiteral("Resource"), Slot::A, RefKind::Resource);
-        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D);
+        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D, RefKind::None, false);
         break;
     case 7:
         appendSlot(list, group, command, QStringLiteral("Unit"), Slot::A, RefKind::Unit);
         appendSlot(list, group, command, QStringLiteral("From building"), Slot::B, RefKind::Unit);
-        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::C);
+        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::C, RefKind::None, false);
         break;
     case 8:
         appendSlot(list, group, command, QStringLiteral("Tech"), Slot::A, RefKind::Tech);
-        appendSlot(list, group, command, QStringLiteral("Action"), Slot::B);
-        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D);
+        appendSlot(list, group, command, QStringLiteral("Action"), Slot::B, RefKind::None, false);
+        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D, RefKind::None, false);
         break;
     case 101:
         appendSlot(list, group, command, QStringLiteral("Tech"), Slot::A, RefKind::Tech);
         appendSlot(list, group, command, QStringLiteral("Resource"), Slot::B, RefKind::Resource);
         appendMode(list, group, command, Slot::C, ModeKind::SetOrAdd);
-        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D);
+        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D, RefKind::None, false);
         break;
     case 102:
         appendTechId(list, group, command);
@@ -215,13 +226,13 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
     case 103:
         appendSlot(list, group, command, QStringLiteral("Tech"), Slot::A, RefKind::Tech);
         appendMode(list, group, command, Slot::C, ModeKind::SetOrAdd);
-        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D);
+        appendSlot(list, group, command, QStringLiteral("Amount"), Slot::D, RefKind::None, false);
         break;
     default:
         appendSlot(list, group, command, QStringLiteral("A"), Slot::A);
         appendSlot(list, group, command, QStringLiteral("B"), Slot::B);
         appendSlot(list, group, command, QStringLiteral("C"), Slot::C);
-        appendSlot(list, group, command, QStringLiteral("D"), Slot::D);
+        appendSlot(list, group, command, QStringLiteral("D"), Slot::D, RefKind::None, false);
         break;
     }
 }

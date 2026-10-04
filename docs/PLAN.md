@@ -221,7 +221,7 @@ Each entity type has a descriptor table in `src/model/`; `FieldDesc<T>` in `Fiel
 - Implemented: applicability predicates for unit types and available collection entries, string-ID annotations, and numeric editing (M4a–M4c).
 - Implemented validation: `ModelTest::editableFieldsRoundTrip` checks get/set round-trips for the supported editable descriptors.
 - Planned: multi-select editing, showing a blank value where selected items differ and writing a new value to all selected items.
-- `FieldDesc::ref` (`RefKind`) marks int fields that hold another entity's ID. `FieldTreeModel::setObject` takes a `RefNamer` from the list model and shows such values as `name (ID)`. Kinds: `Tech` (required techs), `Resource` (costs), `Civ` and `Effect` (tech general fields), `Unit` (research location).
+- `FieldDesc::ref` (`RefKind`) marks int fields that hold another entity's ID. `FieldTreeModel::setObject` takes a `RefNamer` from the list model and shows such values as `name (ID)`. Kinds: `Tech` (required techs), `Resource` (costs), `Civ` and `Effect` (tech general fields), `Unit` (research location and effect commands), `UnitClass` (unit Class and effect commands) and `Attribute` (effect commands). Class and attribute names are AGE's lists; the game files don't store them. `-1` is not an entity and stays the plain number, except unused effect-command slots, which are left out.
 - Planned: more `RefKind` values (train location) and ID pickers. `FieldType` and `minVersion` are not current descriptor members; add metadata only as the new fields require it.
 - Planned: more type-specific unit fields (`Bird`, `Type50`, `Creatable`, `Building`, etc.) with appropriate applicability and version checks.
 - Language IDs are currently read-only. genieutils widens the 16-bit union members into the 32-bit ones on load, so current reads are version-independent. Future setters must respect each format's stored width; older 16-bit fields must stay in `int16_t` range.
@@ -233,7 +233,7 @@ Each entity type has a descriptor table in `src/model/`; `FieldDesc<T>` in `Fiel
 - Planned: route edits through `QUndoStack` / `QUndoCommand` for undo/redo and modified-state tracking.
 - Planned: shared Add / Insert / Delete / Copy / Paste operations on entity lists.
 
-Techs and effects already reuse the shared browser. Effects are global (`DatFile::Effects`; the ID is the index), listed like techs, with one field group per command. The goal for further entity types (graphics, sounds, civs...) is to add a descriptor table and list model while reusing the UI.
+Techs and effects already reuse the shared browser. Effects are global (`DatFile::Effects`; the ID is the index), listed like techs, with one field group per command. Unused command slots (`-1`, usually Unit or Class) are left out; Amount, Mode and Modify Tech's Action keep `-1`. Class and attribute IDs show `name (ID)`. The goal for further entity types (graphics, sounds, civs...) is to add a descriptor table and list model while reusing the UI.
 
 ## 4. Deliberately out of scope (unless needed later)
 

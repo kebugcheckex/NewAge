@@ -2,6 +2,7 @@
 
 #include "core/Session.h"
 #include "genie/dat/DatFile.h"
+#include "model/EffectNames.h"
 #include "model/FieldTreeModel.h"
 #include "model/ResourceNames.h"
 #include "model/UnitFields.h"
@@ -62,7 +63,11 @@ void UnitListModel::showFields(int row, FieldTreeModel &fields)
         return desc.get(target);
     };
     const auto refNamer = [this](RefKind kind, int id) {
-        return kind == RefKind::Resource ? resourceName(session()->gameVersion(), id) : QString();
+        if (kind == RefKind::Resource)
+            return resourceName(session()->gameVersion(), id);
+        if (kind == RefKind::UnitClass)
+            return unitClassName(session()->gameVersion(), id);
+        return QString();
     };
     fields.setObject(unitFields(), *u, &session()->names(), writer, refNamer);
 }

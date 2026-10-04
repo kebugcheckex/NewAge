@@ -23,7 +23,10 @@ struct EffectRef
 // Descriptors for one effect. Command count varies, so this is built per
 // effect rather than returned from a static list. Groups: General, then
 // "Command 1", "Command 2", ... Parameters a command type doesn't use are
-// left out; an unknown type shows A, B, C and D as stored.
+// left out, as are slots still stored as the unused value -1 (usually Unit,
+// when the command targets a class, or Class, when it targets a unit).
+// Amount, Mode and Modify Tech's Action keep -1: it is a real value. An
+// unknown type shows A, B, C and D, omitting any of A/B/C that are -1.
 QList<FieldDesc<EffectRef>> effectFields(const genie::Effect &effect, genie::GameVersion version);
 
 // "102 - Disable Tech" style label for an effect command Type. Unknown or

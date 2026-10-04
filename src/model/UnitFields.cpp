@@ -120,6 +120,11 @@ const QList<FieldDesc<Unit>> &unitFields()
             {"Enabled", flags, {}, [](const Unit &u) { return intValue(u.Enabled); }},
             {"Hide in editor", flags, {}, [](const Unit &u) { return intValue(u.HideInEditor); }},
         };
+        for (FieldDesc<Unit> &field : list)
+        {
+            if (field.name == QStringLiteral("Class"))
+                field.ref = RefKind::UnitClass;
+        }
         return list;
     }();
     return fields;

@@ -43,6 +43,8 @@ add_library(newage_model STATIC
   src/model/EffectFields.h
   src/model/EffectListModel.cpp
   src/model/EffectListModel.h
+  src/model/EffectNames.cpp
+  src/model/EffectNames.h
   src/model/EntityListModel.cpp
   src/model/EntityListModel.h
   src/model/FieldDesc.h

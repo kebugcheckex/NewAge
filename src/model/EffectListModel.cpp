@@ -3,6 +3,7 @@
 #include "core/Session.h"
 #include "genie/dat/DatFile.h"
 #include "model/EffectFields.h"
+#include "model/EffectNames.h"
 #include "model/FieldTreeModel.h"
 #include "model/ResourceNames.h"
 
@@ -88,6 +89,8 @@ void EffectListModel::showFields(int row, FieldTreeModel &fields)
         }
         case RefKind::Resource: return resourceName(session()->gameVersion(), id);
         case RefKind::Unit: return unitName(*session(), civ(), id);
+        case RefKind::UnitClass: return unitClassName(session()->gameVersion(), id);
+        case RefKind::Attribute: return effectAttributeName(session()->gameVersion(), id);
         case RefKind::Effect:
         {
             const auto &effects = session()->dat()->Effects;

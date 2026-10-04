@@ -13,6 +13,7 @@
 #include "genie/dat/DatFile.h"
 #include "model/EffectFields.h"
 #include "model/EffectListModel.h"
+#include "model/EffectNames.h"
 #include "model/FieldTreeModel.h"
 #include "model/ListFilterModel.h"
 #include "model/ResourceNames.h"
@@ -138,6 +139,7 @@ private slots:
     void fieldTreeEditing();
     void techIconMarkedForPreview();
     void effectFieldsListCommands();
+    void effectClassAndAttributeNames();
     void sampleEffectValues();
     void referenceLabelFollowsEdits();
     void editAndSaveSample();
@@ -222,6 +224,9 @@ void ModelTest::sampleUnitValues()
     QCOMPARE(fieldValue(fields, QStringLiteral("Speed")).toFloat(), 0.96f);
     // The list model labels resource costs: 25 wood, 45 gold.
     units.showFields(4, fields);
+    const QString className = unitClassName(session.gameVersion(), archer->Class);
+    QVERIFY(!className.isEmpty());
+    QCOMPARE(fieldText(fields, QStringLiteral("Class")), QStringLiteral("%1 (%2)").arg(className).arg(archer->Class));
     QCOMPARE(fieldText(fields, QStringLiteral("Cost 1 resource")), QStringLiteral("Wood Storage (1)"));
     QCOMPARE(fieldText(fields, QStringLiteral("Cost 2 resource")), QStringLiteral("Gold Storage (3)"));
     QVERIFY(!fieldIndex(fields, QStringLiteral("Cost 3 resource")).isValid());
@@ -849,6 +854,10 @@ void ModelTest::effectFieldsListCommands()
     QVERIFY(!fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Multiply resource")).isValid());
     model.setObject(effectFields(resource, genie::GV_C2), EffectRef{1, resource});
     QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Multiply resource")).data().toInt(), 1);
+    cost.C = -1;
+    resource.EffectCommands = {cost};
+    model.setObject(effectFields(resource, genie::GV_C2), EffectRef{1, resource});
+    QVERIFY(!fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Multiply resource")).isValid());
 
     effect.EffectCommands.clear();
     effect.Name.clear();
@@ -856,6 +865,133 @@ void ModelTest::effectFieldsListCommands()
     QCOMPARE(fieldValue(model, QStringLiteral("Command count")).toInt(), 0);
     QCOMPARE(fieldValue(model, QStringLiteral("Internal name")).toString(), QString());
     QCOMPARE(model.rowCount(), 1);
+
+    const auto names = [](genie::GameVersion version) {
+        return [version](RefKind kind, int id) {
+            switch (kind)
+            {
+            case RefKind::Unit: return id == 4 ? QStringLiteral("Archer") : QString();
+            case RefKind::UnitClass: return unitClassName(version, id);
+            case RefKind::Attribute: return effectAttributeName(version, id);
+            case RefKind::Tech: return id == 22 ? QStringLiteral("Loom") : QString();
+            default: return QString();
+            }
+        };
+    };
+
+    genie::Effect modifier;
+    genie::EffectCommand byClass;
+    byClass.Type = 0;
+    byClass.A = -1;
+    byClass.B = 6;
+    byClass.C = 0;
+    byClass.D = -1;
+    genie::EffectCommand byUnit;
+    byUnit.Type = 4;
+    byUnit.A = 4;
+    byUnit.B = -1;
+    byUnit.C = 99;
+    byUnit.D = 1.5f;
+    genie::EffectCommand blank;
+    blank.Type = 99;
+    blank.A = -1;
+    blank.B = -1;
+    blank.C = -1;
+    blank.D = 0;
+    modifier.EffectCommands = {byClass, byUnit, blank};
+    model.setObject(effectFields(modifier, genie::GV_TC), EffectRef{2, modifier}, nullptr, {}, names(genie::GV_TC));
+
+    QVERIFY(!fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Unit")).isValid());
+    const QModelIndex unitClass = fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Class"));
+    QCOMPARE(unitClass.data().toString(), QStringLiteral("Infantry (6)"));
+    QCOMPARE(unitClass.data(FieldTreeModel::ValueRole).toInt(), 6);
+    QCOMPARE(unitClass.data(FieldTreeModel::RefKindRole).toInt(), static_cast<int>(RefKind::UnitClass));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Attribute")).data().toString(),
+             QStringLiteral("Hit Points (0)"));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Amount")).data().toString(),
+             QStringLiteral("-1"));
+
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("Unit")).data().toString(),
+             QStringLiteral("Archer (4)"));
+    QVERIFY(!fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("Class")).isValid());
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("Attribute")).data().toString(),
+             QStringLiteral("99"));
+
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 3"), QStringLiteral("Type")).data().toString(),
+             QStringLiteral("99 - Unknown"));
+    QVERIFY(!fieldInGroup(model, QStringLiteral("Command 3"), QStringLiteral("A")).isValid());
+    QVERIFY(!fieldInGroup(model, QStringLiteral("Command 3"), QStringLiteral("C")).isValid());
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 3"), QStringLiteral("D")).data().toFloat(), 0.0f);
+
+    genie::Effect upgrade;
+    genie::EffectCommand toUnit;
+    toUnit.Type = 3;
+    toUnit.A = 4;
+    toUnit.B = -1;
+    toUnit.C = -1;
+    upgrade.EffectCommands = {toUnit};
+    model.setObject(effectFields(upgrade, genie::GV_C2), EffectRef{3, upgrade}, nullptr, {}, names(genie::GV_C2));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Mode")).data().toString(),
+             QStringLiteral("-1 - All"));
+    QVERIFY(!fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("To unit")).isValid());
+
+    genie::Effect techMod;
+    genie::EffectCommand action;
+    action.Type = 8;
+    action.A = 22;
+    action.B = -1;
+    action.D = 5;
+    techMod.EffectCommands = {action};
+    model.setObject(effectFields(techMod, genie::GV_C2), EffectRef{4, techMod}, nullptr, {}, names(genie::GV_C2));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Action")).data().toInt(), -1);
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Tech")).data().toString(),
+             QStringLiteral("Loom (22)"));
+}
+
+void ModelTest::effectClassAndAttributeNames()
+{
+    QCOMPARE(unitClassName(genie::GV_AoE, 18), QStringLiteral("Priest"));
+    QCOMPARE(unitClassName(genie::GV_Tapsa, 39), QStringLiteral("Slinger"));
+    QCOMPARE(unitClassName(genie::GV_AoE, 40), QString());
+    QCOMPARE(unitClassName(genie::GV_TC, 6), QStringLiteral("Infantry"));
+    QCOMPARE(unitClassName(genie::GV_TC, 18), QStringLiteral("Monk"));
+    QCOMPARE(unitClassName(genie::GV_TC, 23), QStringLiteral("Conquistador"));
+    QCOMPARE(unitClassName(genie::GV_TC, 35), QStringLiteral("Petard"));
+    QCOMPARE(unitClassName(genie::GV_C2, 39), QStringLiteral("Gate"));
+    QCOMPARE(unitClassName(genie::GV_TC, 61), QStringLiteral("Controlled Animal"));
+    QCOMPARE(unitClassName(genie::GV_TC, 62), QString());
+    QCOMPARE(unitClassName(genie::GV_TC, -1), QString());
+    QCOMPARE(unitClassName(genie::GV_SWGB, 1), QStringLiteral("Nerf/Bantha"));
+    QCOMPARE(unitClassName(genie::GV_CC, 58), QStringLiteral("Workers"));
+
+    QCOMPARE(effectAttributeName(genie::GV_AoE, 8), QStringLiteral("Armor (no multiply)"));
+    QCOMPARE(effectAttributeName(genie::GV_AoE, 101), QString());
+    QCOMPARE(effectAttributeName(genie::GV_RoR, 101), QStringLiteral("Population (set only)"));
+    QCOMPARE(effectAttributeName(genie::GV_Tapsa, 101), QStringLiteral("Population (set only)"));
+    QCOMPARE(effectAttributeName(genie::GV_TC, 0), QStringLiteral("Hit Points"));
+    QCOMPARE(effectAttributeName(genie::GV_TC, 8), QStringLiteral("Armor"));
+    QCOMPARE(effectAttributeName(genie::GV_TC, 40), QString());
+    QCOMPARE(effectAttributeName(genie::GV_TC, 101), QStringLiteral("Train Time"));
+    QCOMPARE(effectAttributeName(genie::GV_TC, 104), QStringLiteral("Wood Costs"));
+    QCOMPARE(effectAttributeName(genie::GV_AoKA, 108), QString());
+    QCOMPARE(effectAttributeName(genie::GV_AoK, 108), QStringLiteral("Garrison Heal Rate"));
+    QCOMPARE(effectAttributeName(genie::GV_Cysion, 24), QString());
+    QCOMPARE(effectAttributeName(genie::GV_Cysion, 109), QStringLiteral("Regeneration Rate"));
+    QCOMPARE(effectAttributeName(genie::GV_C2, 40), QStringLiteral("Hero Status"));
+    QCOMPARE(effectAttributeName(genie::GV_C2, 35), QString());
+    QCOMPARE(effectAttributeName(genie::GV_C2, 115), QStringLiteral("Area Damage"));
+    QCOMPARE(effectAttributeName(genie::GV_SWGB, 104), QStringLiteral("Carbon Costs"));
+    QCOMPARE(effectAttributeName(genie::GV_SWGB, 109), QString());
+    QCOMPARE(effectAttributeName(genie::GV_TC, -1), QString());
+
+    genie::Unit unit;
+    unit.Class = 6;
+    FieldTreeModel units;
+    units.setObject(unitFields(), unit, nullptr, {}, [](RefKind kind, int id) {
+        return kind == RefKind::UnitClass ? unitClassName(genie::GV_TC, id) : QString();
+    });
+    QCOMPARE(fieldText(units, QStringLiteral("Class")), QStringLiteral("Infantry (6)"));
+    QCOMPARE(fieldValue(units, QStringLiteral("Class")).toInt(), 6);
 }
 
 void ModelTest::sampleEffectValues()
