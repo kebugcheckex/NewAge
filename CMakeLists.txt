@@ -47,13 +47,18 @@ add_library(newage_model STATIC
   src/model/EffectListModel.h
   src/model/EffectNames.cpp
   src/model/EffectNames.h
+  src/model/EntityKind.cpp
+  src/model/EntityKind.h
   src/model/EntityListModel.cpp
   src/model/EntityListModel.h
+  src/model/FieldDesc.cpp
   src/model/FieldDesc.h
   src/model/FieldTreeModel.cpp
   src/model/FieldTreeModel.h
   src/model/ListFilterModel.cpp
   src/model/ListFilterModel.h
+  src/model/RefNames.cpp
+  src/model/RefNames.h
   src/model/ResourceNames.cpp
   src/model/ResourceNames.h
   src/model/TechFields.cpp
@@ -68,6 +73,15 @@ add_library(newage_model STATIC
   src/model/UnitNames.h
 )
 target_link_libraries(newage_model PUBLIC newage_core)
+
+# --- api: source open, mod-only writes, and JSON requests, no widgets ---------
+add_library(newage_api STATIC
+  src/api/DataService.cpp
+  src/api/DataService.h
+  src/api/RequestHandler.cpp
+  src/api/RequestHandler.h
+)
+target_link_libraries(newage_api PUBLIC newage_model)
 
 # vcpkg's applocal step copies linked DLLs next to an exe but not Qt plugins,
 # which Qt loads at runtime from <exe dir>/<plugin type>/. Copy the ones we need
@@ -115,7 +129,7 @@ target_link_libraries(NewAge PRIVATE newage_ui)
 target_compile_definitions(NewAge PRIVATE NEWAGE_VERSION="${PROJECT_VERSION}")
 newage_deploy_qt_plugins(NewAge)
 
-foreach(target newage_core newage_model newage_ui NewAge)
+foreach(target newage_core newage_model newage_api newage_ui NewAge)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
   else()

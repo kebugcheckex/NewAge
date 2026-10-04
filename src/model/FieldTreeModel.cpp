@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <charconv>
-#include <cmath>
 
 namespace newage {
 
@@ -140,13 +139,13 @@ bool FieldTreeModel::setData(const QModelIndex &index, const QVariant &value, in
         return false;
 
     Row &row = groups_[static_cast<int>(index.internalId() - 1)].rows[index.row()];
-    const QVariant parsed = parseValue(row, value);
-    if (!parsed.isValid())
+    const ParsedField parsed = parseFieldValue({row.value.typeId(), row.minimum, row.maximum}, value);
+    if (!parsed.value.isValid())
         return false;
     // Leave the data (and its modified state) alone when nothing changes.
-    if (parsed == row.value)
+    if (parsed.value == row.value)
         return true;
-    const QVariant stored = writer_(row.field, parsed);
+    const QVariant stored = writer_(row.field, parsed.value);
     if (!stored.isValid())
         return false;
     row.value = stored;
@@ -161,22 +160,6 @@ const FieldTreeModel::Row *FieldTreeModel::rowAt(const QModelIndex &index) const
     if (!index.isValid() || index.internalId() == kGroupId)
         return nullptr;
     return &groups_.at(static_cast<int>(index.internalId() - 1)).rows.at(index.row());
-}
-
-QVariant FieldTreeModel::parseValue(const Row &row, const QVariant &value)
-{
-    // Going through text also accepts an int or float QVariant.
-    const QString text = value.toString().trimmed();
-    bool ok = false;
-    if (row.value.typeId() == QMetaType::Float)
-    {
-        const float number = text.toFloat(&ok);
-        return ok && std::isfinite(number) ? QVariant(number) : QVariant();
-    }
-    const qlonglong number = text.toLongLong(&ok);
-    if (!ok || number < row.minimum || number > row.maximum)
-        return {};
-    return QVariant(static_cast<int>(number));
 }
 
 QVariant FieldTreeModel::headerData(int section, Qt::Orientation orientation, int role) const

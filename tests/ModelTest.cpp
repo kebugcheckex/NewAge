@@ -14,10 +14,12 @@
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
 #include "model/EffectFields.h"
+#include "model/EntityKind.h"
 #include "model/EffectListModel.h"
 #include "model/EffectNames.h"
 #include "model/FieldTreeModel.h"
 #include "model/ListFilterModel.h"
+#include "model/RefNames.h"
 #include "model/ResourceNames.h"
 #include "model/TechFields.h"
 #include "model/TechListModel.h"
@@ -74,6 +76,34 @@ QVariant fieldValue(const FieldTreeModel &model, const QString &name)
 QString fieldText(const FieldTreeModel &model, const QString &name)
 {
     return fieldIndex(model, name).data().toString();
+}
+
+// Every reference row shows the label refName would give for that ID.
+bool referenceLabelsMatch(const FieldTreeModel &fields, const Session &session, int civ, QString *detail)
+{
+    for (int g = 0; g < fields.rowCount(); ++g)
+    {
+        const QModelIndex group = fields.index(g, 0);
+        for (int r = 0; r < fields.rowCount(group); ++r)
+        {
+            const QModelIndex value = fields.index(r, FieldTreeModel::ValueColumn, group);
+            const auto kind = static_cast<RefKind>(value.data(FieldTreeModel::RefKindRole).toInt());
+            if (kind == RefKind::None || value.data(FieldTreeModel::ValueRole).typeId() != QMetaType::Int)
+                continue;
+            const int id = value.data(FieldTreeModel::ValueRole).toInt();
+            const QString label = refName(session, kind, id, civ);
+            const QString expected =
+                label.isEmpty() ? QString::number(id)
+                                : (isCodeKind(kind) ? QStringLiteral("%1 - %2").arg(id).arg(label)
+                                                    : QStringLiteral("%1 (%2)").arg(label).arg(id));
+            if (value.data().toString() == expected)
+                continue;
+            const QString name = fields.index(r, FieldTreeModel::NameColumn, group).data().toString();
+            *detail = QStringLiteral("%1: %2 != %3").arg(name, value.data().toString(), expected);
+            return false;
+        }
+    }
+    return true;
 }
 
 // Edits field `name` in `model` as a view would.
@@ -160,6 +190,10 @@ private slots:
     void editableFieldsRoundTrip();
     void fieldKeysAreStable();
     void typeFieldsAreCodes();
+    void refNameLabelsReferences();
+    void parseFieldValueRejects();
+    void entityKindRegistry();
+    void entityKindReadsAndSets();
     void costFieldsSkipUnusedSlots();
     void resourceNamesPerVersion();
     void fieldTreeEditing();
@@ -826,6 +860,83 @@ void ModelTest::typeFieldsAreCodes()
     QCOMPARE(techTypeName(5), QStringLiteral("Unknown"));
 }
 
+void ModelTest::refNameLabelsReferences()
+{
+    Session closed;
+    QCOMPARE(refName(closed, RefKind::None, 1, 0), QString());
+    QCOMPARE(refName(closed, RefKind::UnitType, genie::UT_Creatable, -1), QStringLiteral("Combatant"));
+    QCOMPARE(refName(closed, RefKind::UnitType, 99, 0), QStringLiteral("Unknown"));
+    QCOMPARE(refName(closed, RefKind::TechType, 2, 0), QStringLiteral("Age"));
+    QCOMPARE(refName(closed, RefKind::TechType, 5, 0), QStringLiteral("Unknown"));
+    QCOMPARE(refName(closed, RefKind::Unit, 4, 1), QString());
+    QCOMPARE(refName(closed, RefKind::Tech, 22, 1), QString());
+    QCOMPARE(refName(closed, RefKind::Civ, 1, 0), QString());
+    QCOMPARE(refName(closed, RefKind::Effect, 22, 0), QString());
+    QCOMPARE(refName(closed, RefKind::Resource, 1, 0), resourceName(closed.gameVersion(), 1));
+    QCOMPARE(refName(closed, RefKind::UnitClass, 4, 0), unitClassName(closed.gameVersion(), 4));
+    QCOMPARE(refName(closed, RefKind::Attribute, 0, 0), effectAttributeName(closed.gameVersion(), 0));
+
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+
+    Session session;
+    QVERIFY(openSample(session));
+    const int civ = 1;
+
+    const QString civLabel = QString::fromLatin1(session.dat()->Civs.at(civ).Name);
+    QVERIFY(!civLabel.isEmpty());
+    QCOMPARE(refName(session, RefKind::Civ, civ, 99), civLabel);
+    QCOMPARE(refName(session, RefKind::Civ, -1, civ), QString());
+    QCOMPARE(refName(session, RefKind::Civ, static_cast<int>(session.dat()->Civs.size()), civ), QString());
+
+    QCOMPARE(refName(session, RefKind::Unit, 4, civ), unitName(session, civ, 4));
+    QCOMPARE(refName(session, RefKind::Unit, 4, 0), unitName(session, 0, 4));
+    QCOMPARE(refName(session, RefKind::Unit, -1, civ), QString());
+
+    const genie::Tech &loom = session.dat()->Techs.at(22);
+    QString loomName = session.names().text(loom.LanguageDLLName);
+    if (loomName.isEmpty())
+        loomName = QString::fromLatin1(loom.Name);
+    QVERIFY(!loomName.isEmpty());
+    QCOMPARE(refName(session, RefKind::Tech, 22, civ), loomName);
+    QCOMPARE(refName(session, RefKind::Tech, 22, 0), loomName);
+    QCOMPARE(refName(session, RefKind::Tech, -1, civ), QString());
+    QCOMPARE(refName(session, RefKind::Tech, static_cast<int>(session.dat()->Techs.size()), civ), QString());
+
+    const QString effectLabel = QString::fromLatin1(session.dat()->Effects.at(22).Name);
+    QVERIFY(!effectLabel.isEmpty());
+    QCOMPARE(refName(session, RefKind::Effect, 22, civ), effectLabel);
+    QCOMPARE(refName(session, RefKind::Effect, -1, civ), QString());
+
+    UnitListModel units(&session);
+    units.setCiv(civ);
+    FieldTreeModel fields;
+    QString detail;
+    units.showFields(4, fields);
+    QVERIFY2(referenceLabelsMatch(fields, session, civ, &detail), qPrintable(detail));
+
+    TechListModel techs(&session);
+    techs.setCiv(civ);
+    techs.showFields(22, fields);
+    QVERIFY2(referenceLabelsMatch(fields, session, civ, &detail), qPrintable(detail));
+    for (int id = 0; id < techs.rowCount(); ++id)
+    {
+        if (session.dat()->Techs[id].Civ < 0)
+            continue;
+        techs.showFields(id, fields);
+        QVERIFY2(referenceLabelsMatch(fields, session, civ, &detail), qPrintable(detail));
+        break;
+    }
+
+    EffectListModel effects(&session);
+    effects.setCiv(civ);
+    for (int id = 0; id < effects.rowCount(); ++id)
+    {
+        effects.showFields(id, fields);
+        QVERIFY2(referenceLabelsMatch(fields, session, civ, &detail), qPrintable(detail));
+    }
+}
+
 void ModelTest::costFieldsSkipUnusedSlots()
 {
     genie::Unit unit;
@@ -861,6 +972,149 @@ void ModelTest::resourceNamesPerVersion()
     QCOMPARE(resourceNames(genie::GV_TC).size(), 198);
     QCOMPARE(resourceName(genie::GV_TC, 198), QString());
     QCOMPARE(resourceName(genie::GV_TC, -1), QString());
+}
+
+void ModelTest::parseFieldValueRejects()
+{
+    const FieldValueDesc hp{QMetaType::Int, -100, 100};
+    const ParsedField low = parseFieldValue(hp, QStringLiteral(" -100 "));
+    QVERIFY(low.code.isEmpty());
+    QCOMPARE(low.value, QVariant(-100));
+
+    const ParsedField text = parseFieldValue(hp, QStringLiteral("abc"));
+    QVERIFY(!text.value.isValid());
+    QCOMPARE(text.code, QStringLiteral("bad_value"));
+    QCOMPARE(parseFieldValue(hp, QStringLiteral("2.5")).code, QStringLiteral("bad_value"));
+
+    const ParsedField high = parseFieldValue(hp, 101);
+    QVERIFY(!high.value.isValid());
+    QCOMPARE(high.code, QStringLiteral("out_of_range"));
+    QCOMPARE(high.message, QStringLiteral("accepts -100..100"));
+    QCOMPARE(parseFieldValue(hp, -101).code, QStringLiteral("out_of_range"));
+
+    const FieldValueDesc los{QMetaType::Float};
+    const ParsedField speed = parseFieldValue(los, QStringLiteral("0.2"));
+    QVERIFY(speed.code.isEmpty());
+    QCOMPARE(speed.value, QVariant(0.2f));
+    QCOMPARE(parseFieldValue(los, QStringLiteral("inf")).code, QStringLiteral("bad_value"));
+    QCOMPARE(parseFieldValue(los, QString()).code, QStringLiteral("bad_value"));
+    QCOMPARE(parseFieldValue(hp, -100).value, QVariant(-100));
+    QCOMPARE(parseFieldValue(los, 0.2f).value, QVariant(0.2f));
+    // Floats have no range. A number an int field would refuse still parses.
+    QVERIFY(parseFieldValue(FieldValueDesc{QMetaType::Float, -100, 100}, QStringLiteral("1000")).code.isEmpty());
+}
+
+void ModelTest::entityKindRegistry()
+{
+    const QStringList keys{QStringLiteral("civ"), QStringLiteral("unit"), QStringLiteral("tech"),
+                           QStringLiteral("effect")};
+    QStringList actual;
+    for (const EntityKind *kind : entityKinds())
+        actual << kind->key();
+    QCOMPARE(actual, keys);
+    QVERIFY(!findEntityKind(QStringLiteral("resource")));
+    QCOMPARE(findEntityKind(QStringLiteral("unit")), &unitKind());
+    QVERIFY(unitKind().perCiv());
+    QVERIFY(!techKind().perCiv());
+    Session closed;
+    QCOMPARE(unitKind().count(closed, 1), 0);
+    QCOMPARE(unitKind().set(closed, 1, 4, QStringLiteral("hit_points"), 1).code, QStringLiteral("unknown_entity"));
+}
+
+void ModelTest::entityKindReadsAndSets()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+
+    Session session;
+    QVERIFY(openSample(session));
+    UnitListModel units(&session);
+    units.setCiv(1);
+    TechListModel techs(&session);
+    techs.setCiv(1);
+    EffectListModel effects(&session);
+    effects.setCiv(1);
+
+    QCOMPARE(unitKind().name(session, 1, 4), units.name(4));
+    QCOMPARE(unitKind().internalName(session, 1, 4), QStringLiteral("ARCHR"));
+    QCOMPARE(techKind().name(session, 1, 22), techs.name(22));
+    QCOMPARE(effectKind().name(session, 1, 0), effects.name(0));
+    QCOMPARE(civKind().name(session, 0, 1), QString::fromLatin1(session.dat()->Civs.at(1).Name));
+    QCOMPARE(civKind().count(session, 0), static_cast<int>(session.dat()->Civs.size()));
+
+    const QList<FieldValue> archer = unitKind().fields(session, 1, 4);
+    const auto hitPoints = std::find_if(archer.begin(), archer.end(), [](const FieldValue &field) {
+        return field.key == QLatin1String("hit_points");
+    });
+    QVERIFY(hitPoints != archer.end());
+    QCOMPARE(hitPoints->value.toInt(), 30);
+    QCOMPARE(hitPoints->type, QStringLiteral("int"));
+    QVERIFY(hitPoints->editable);
+    QCOMPARE(hitPoints->minimum, -32768);
+    const auto type = std::find_if(archer.begin(), archer.end(), [](const FieldValue &field) {
+        return field.key == QLatin1String("type");
+    });
+    QVERIFY(type != archer.end());
+    QCOMPARE(type->label, QStringLiteral("Combatant"));
+    QVERIFY(!type->editable);
+
+    QVERIFY(!session.isModified());
+    const SetResult same = unitKind().set(session, 1, 4, QStringLiteral("hit_points"), 30);
+    QVERIFY(same.ok);
+    QVERIFY(!same.changed);
+    QVERIFY(!session.isModified());
+
+    const SetResult changed = unitKind().set(session, 1, 4, QStringLiteral("hit_points"), 31);
+    QVERIFY(changed.ok);
+    QVERIFY(changed.changed);
+    QCOMPARE(changed.oldValue.toInt(), 30);
+    QCOMPARE(changed.newValue.toInt(), 31);
+    QVERIFY(session.isModified());
+    QCOMPARE(session.dat()->Civs.at(1).Units.at(4).HitPoints, static_cast<int16_t>(31));
+    QCOMPARE(session.dat()->Civs.at(0).Units.at(4).HitPoints, static_cast<int16_t>(30));
+
+    const SetResult range = unitKind().set(session, 1, 4, QStringLiteral("hit_points"), 99999);
+    QCOMPARE(range.code, QStringLiteral("out_of_range"));
+    QCOMPARE(range.message, QStringLiteral("hit_points accepts -32768..32767"));
+    QCOMPARE(unitKind().set(session, 1, 4, QStringLiteral("hit_points"), QStringLiteral("no")).code,
+             QStringLiteral("bad_value"));
+    QCOMPARE(unitKind().set(session, 1, 4, QStringLiteral("nope"), 1).code, QStringLiteral("unknown_field"));
+    QCOMPARE(unitKind().set(session, 1, 4, QStringLiteral("id"), 1).code, QStringLiteral("read_only"));
+    QCOMPARE(unitKind().set(session, 1, unitKind().count(session, 1), QStringLiteral("hit_points"), 1).code,
+             QStringLiteral("unknown_entity"));
+
+    int slow = -1;
+    int empty = -1;
+    const genie::Civ &britons = session.dat()->Civs.at(1);
+    for (int id = 0; id < static_cast<int>(britons.Units.size()); ++id)
+    {
+        if (britons.UnitPointers.at(id) == 0)
+            empty = id;
+        else if (britons.Units.at(id).Type < 20)
+            slow = id;
+        if (slow >= 0 && empty >= 0)
+            break;
+    }
+    QVERIFY(empty >= 0);
+    QCOMPARE(unitKind().set(session, 1, empty, QStringLiteral("hit_points"), 1).code, QStringLiteral("inactive_entity"));
+    QVERIFY(slow >= 0);
+    QCOMPARE(unitKind().set(session, 1, slow, QStringLiteral("speed"), 1).code, QStringLiteral("not_applicable"));
+
+    QCOMPARE(techKind().isActive(session, 1, 59), false);
+    QCOMPARE(techs.availability(59), TechAvailability::OtherCiv);
+    const QList<FieldValue> kataparuto = techKind().fields(session, 1, 59);
+    const auto editable = std::find_if(kataparuto.begin(), kataparuto.end(), [](const FieldValue &field) {
+        return field.editable && field.type == QLatin1String("int");
+    });
+    QVERIFY(editable != kataparuto.end());
+    const int previous = editable->value.toInt();
+    const SetResult techEdit = techKind().set(session, 1, 59, editable->key, previous == 0 ? 1 : 0);
+    QVERIFY(techEdit.ok);
+    QCOMPARE(techKind().set(session, 1, 59, editable->key, previous).newValue.toInt(), previous);
+
+    const QList<FieldValue> effectFields = effectKind().fields(session, 1, 0);
+    QVERIFY(!effectFields.isEmpty());
+    QCOMPARE(effectKind().set(session, 1, 0, effectFields.front().key, 1).code, QStringLiteral("read_only"));
 }
 
 void ModelTest::fieldTreeEditing()
@@ -991,7 +1245,9 @@ void ModelTest::editAndSaveSample()
     QVERIFY(editField(fields, QStringLiteral("Research time"), 30));
     QVERIFY(editField(fields, QStringLiteral("Cost 1 amount"), 60));
     QVERIFY(editField(fields, QStringLiteral("Required tech 1"), 101));
-    QCOMPARE(fieldText(fields, QStringLiteral("Required tech 1")), QStringLiteral("%1 (101)").arg(techs.name(101)));
+    const QString requiredName = refName(session, RefKind::Tech, 101, 1);
+    QVERIFY(!requiredName.isEmpty());
+    QCOMPARE(fieldText(fields, QStringLiteral("Required tech 1")), QStringLiteral("%1 (101)").arg(requiredName));
     QCOMPARE(session.dat()->Techs.at(22).RequiredTechs.at(0), int16_t(101));
     int otherBuilding = -1;
     {

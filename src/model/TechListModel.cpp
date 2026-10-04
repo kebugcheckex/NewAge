@@ -1,22 +1,13 @@
 #include "model/TechListModel.h"
 
-#include <cmath>
-
 #include "core/Session.h"
 #include "genie/dat/DatFile.h"
+#include "model/EntityKind.h"
 #include "model/FieldTreeModel.h"
-#include "model/ResourceNames.h"
+#include "model/RefNames.h"
 #include "model/TechFields.h"
-#include "model/UnitNames.h"
 
 namespace newage {
-
-namespace {
-
-// Effect command type "disable tech"; D is the tech ID.
-constexpr int kDisableTech = 102;
-
-} // namespace
 
 TechListModel::TechListModel(Session *session, QObject *parent)
     : EntityListModel(session, parent)
@@ -29,27 +20,7 @@ void TechListModel::civChanged()
     if (!hasCiv())
         return;
 
-    const genie::DatFile &dat = *session()->dat();
-    availability_.fill(Availability::Available, static_cast<qsizetype>(dat.Techs.size()));
-    for (qsizetype id = 0; id < availability_.size(); ++id)
-    {
-        const int techCiv = dat.Techs[id].Civ;
-        if (techCiv >= 0 && techCiv != civ())
-            availability_[id] = Availability::OtherCiv;
-    }
-
-    const int techTree = dat.Civs.at(civ()).TechTreeID;
-    if (techTree < 0 || techTree >= static_cast<int>(dat.Effects.size()))
-        return;
-    for (const genie::EffectCommand &command : dat.Effects[techTree].EffectCommands)
-    {
-        if (command.Type != kDisableTech)
-            continue;
-        const auto id = static_cast<qsizetype>(std::lround(command.D));
-        // A tech of another civ is reported as that, the more telling reason.
-        if (id >= 0 && id < availability_.size() && availability_[id] == Availability::Available)
-            availability_[id] = Availability::DisabledByTechTree;
-    }
+    availability_ = techAvailability(*session(), civ());
 }
 
 const genie::Tech *TechListModel::tech(int row) const
@@ -73,14 +44,9 @@ int TechListModel::rowCount(const QModelIndex &parent) const
 
 QString TechListModel::name(int row) const
 {
-    const genie::Tech *t = tech(row);
-    if (!t)
+    if (!hasCiv())
         return {};
-    if (const QString name = session()->names().text(t->LanguageDLLName); !name.isEmpty())
-        return name;
-    if (!t->Name.empty())
-        return QString::fromLatin1(t->Name);
-    return tr("(unnamed)");
+    return techKind().name(*session(), civ(), row);
 }
 
 void TechListModel::showFields(int row, FieldTreeModel &fields)
@@ -94,38 +60,14 @@ void TechListModel::showFields(int row, FieldTreeModel &fields)
     // Techs are global, so the writer doesn't depend on the civ. It looks the
     // tech up again on every write, so it never holds a pointer into the data.
     const auto writer = [this, row](int field, const QVariant &value) -> QVariant {
-        if (!tech(row))
+        const SetResult result = techKind().set(*session(), civ(), row, techFields().at(field).key, value);
+        if (!result.ok)
             return {};
-        TechRef target{row, session()->dat()->Techs.at(row)};
-        const FieldDesc<TechRef> &desc = techFields().at(field);
-        desc.set(target, value);
-        entityEdited(row);
-        return desc.get(target);
+        if (result.changed)
+            entityEdited(row);
+        return result.newValue;
     };
-    const auto refNamer = [this](RefKind kind, int id) {
-        switch (kind)
-        {
-        case RefKind::Tech: return name(id);
-        case RefKind::Resource: return resourceName(session()->gameVersion(), id);
-        case RefKind::Civ:
-        {
-            const auto &civs = session()->dat()->Civs;
-            if (id < 0 || id >= static_cast<int>(civs.size()) || civs[id].Name.empty())
-                return QString();
-            return QString::fromLatin1(civs[id].Name);
-        }
-        case RefKind::Effect:
-        {
-            const auto &effects = session()->dat()->Effects;
-            if (id < 0 || id >= static_cast<int>(effects.size()) || effects[id].Name.empty())
-                return QString();
-            return QString::fromLatin1(effects[id].Name);
-        }
-        case RefKind::Unit: return unitName(*session(), civ(), id);
-        case RefKind::TechType: return techTypeName(id);
-        default: return QString();
-        }
-    };
+    const auto refNamer = [this](RefKind kind, int id) { return refName(*session(), kind, id, civ()); };
     fields.setObject(techFields(), TechRef{row, session()->dat()->Techs.at(row)}, &session()->names(), writer,
                      refNamer);
 }
@@ -161,13 +103,14 @@ QVariant TechListModel::data(const QModelIndex &index, int role) const
 
 bool TechListModel::isActive(int row) const
 {
-    return tech(row) && availability(row) == Availability::Available;
+    return hasCiv() && techKind().isActive(*session(), civ(), row);
 }
 
 QString TechListModel::internalName(int row) const
 {
-    const genie::Tech *t = tech(row);
-    return t ? QString::fromLatin1(t->Name) : QString();
+    if (!hasCiv())
+        return {};
+    return techKind().internalName(*session(), civ(), row);
 }
 
 } // namespace newage

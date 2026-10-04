@@ -7,7 +7,7 @@ namespace newage {
 
 QString unitName(const Session &session, int civ, int id)
 {
-    if (civ < 0 || id < 0)
+    if (!session.isOpen() || civ < 0 || id < 0)
         return {};
     const auto &civs = session.dat()->Civs;
     if (civ >= static_cast<int>(civs.size()))

@@ -117,4 +117,26 @@ FieldDesc<T> numberField(const QString &key, const QString &name, const QString 
     return field;
 }
 
+// The part of a field descriptor that parsing needs: the stored type and, for
+// an int, the inclusive range. `typeId` is QMetaType::Float or an integer type.
+struct FieldValueDesc
+{
+    int typeId = QMetaType::Int;
+    int minimum = 0;
+    int maximum = 0;
+};
+
+// A parsed edit. `value` is the int or float to store exactly when `code` is
+// empty. Otherwise `code` is "bad_value" or "out_of_range" and `value` is
+// invalid. An out-of-range `message` is "accepts <min>..<max>", so a caller
+// can prefix the field key.
+struct ParsedField
+{
+    QVariant value;
+    QString code;
+    QString message;
+};
+
+ParsedField parseFieldValue(const FieldValueDesc &field, const QVariant &input);
+
 } // namespace newage

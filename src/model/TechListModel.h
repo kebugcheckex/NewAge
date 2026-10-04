@@ -2,6 +2,7 @@
 
 #include <QList>
 
+#include "model/EntityKind.h"
 #include "model/EntityListModel.h"
 
 namespace genie {
@@ -19,15 +20,7 @@ class TechListModel : public EntityListModel
     Q_OBJECT
 
 public:
-    enum class Availability
-    {
-        Available,
-        // Tech::Civ names another civ (unique techs, civ bonuses).
-        OtherCiv,
-        // The civ's tech tree effect (Civ::TechTreeID) disables it with a
-        // "disable tech" command (type 102).
-        DisabledByTechTree,
-    };
+    using Availability = TechAvailability;
 
     explicit TechListModel(Session *session, QObject *parent = nullptr);
 

@@ -139,9 +139,6 @@ private:
     // nullptr for a group heading.
     const Row *rowAt(const QModelIndex &index) const;
     bool isEditable(const Row &row) const { return row.field >= 0 && writer_; }
-    // `value` converted to the type of `row`, or an invalid QVariant if it
-    // isn't a valid value for it.
-    static QVariant parseValue(const Row &row, const QVariant &value);
 
     QList<Group> groups_;
     Writer writer_;

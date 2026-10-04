@@ -2,11 +2,10 @@
 
 #include "core/Session.h"
 #include "genie/dat/DatFile.h"
-#include "model/EffectNames.h"
+#include "model/EntityKind.h"
 #include "model/FieldTreeModel.h"
-#include "model/ResourceNames.h"
+#include "model/RefNames.h"
 #include "model/UnitFields.h"
-#include "model/UnitNames.h"
 
 namespace newage {
 
@@ -31,14 +30,7 @@ int UnitListModel::rowCount(const QModelIndex &parent) const
 
 QString UnitListModel::name(int row) const
 {
-    const genie::Unit *u = unit(row);
-    if (!u)
-        return tr("(empty)");
-    if (const QString name = session()->names().text(u->LanguageDLLName); !name.isEmpty())
-        return name;
-    if (!u->Name.empty())
-        return QString::fromLatin1(u->Name);
-    return tr("(unnamed)");
+    return unitKind().name(*session(), civ(), row);
 }
 
 void UnitListModel::showFields(int row, FieldTreeModel &fields)
@@ -55,25 +47,16 @@ void UnitListModel::showFields(int row, FieldTreeModel &fields)
     // into the data.
     const int editCiv = civ();
     const auto writer = [this, editCiv, row](int field, const QVariant &value) -> QVariant {
-        if (civ() != editCiv || !isActive(row))
+        if (civ() != editCiv)
             return {};
-        genie::Unit &target = session()->dat()->Civs.at(editCiv).Units.at(row);
-        const FieldDesc<genie::Unit> &desc = unitFields().at(field);
-        desc.set(target, value);
-        entityEdited(row);
-        return desc.get(target);
+        const SetResult result = unitKind().set(*session(), editCiv, row, unitFields().at(field).key, value);
+        if (!result.ok)
+            return {};
+        if (result.changed)
+            entityEdited(row);
+        return result.newValue;
     };
-    const auto refNamer = [this](RefKind kind, int id) {
-        if (kind == RefKind::Resource)
-            return resourceName(session()->gameVersion(), id);
-        if (kind == RefKind::UnitClass)
-            return unitClassName(session()->gameVersion(), id);
-        if (kind == RefKind::Unit)
-            return unitName(*session(), civ(), id);
-        if (kind == RefKind::UnitType)
-            return unitTypeName(id);
-        return QString();
-    };
+    const auto refNamer = [this](RefKind kind, int id) { return refName(*session(), kind, id, civ()); };
     fields.setObject(unitFields(), *u, &session()->names(), writer, refNamer);
 }
 
@@ -86,17 +69,12 @@ Qt::ItemFlags UnitListModel::flags(const QModelIndex &index) const
 
 bool UnitListModel::isActive(int row) const
 {
-    if (!hasCiv())
-        return false;
-    const genie::Civ &civ = session()->dat()->Civs.at(this->civ());
-    return row >= 0 && row < static_cast<int>(civ.Units.size()) && row < static_cast<int>(civ.UnitPointers.size())
-           && civ.UnitPointers.at(row) != 0;
+    return unitKind().isActive(*session(), civ(), row);
 }
 
 QString UnitListModel::internalName(int row) const
 {
-    const genie::Unit *u = unit(row);
-    return u ? QString::fromLatin1(u->Name) : QString();
+    return unitKind().internalName(*session(), civ(), row);
 }
 
 } // namespace newage

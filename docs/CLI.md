@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. Nothing here is implemented yet.
+Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` serves `info` (JSON request to JSON result, exit codes from section 6.2); `cli_test` drives it. The console executable and the other read commands are not built yet.
 
 ## 1. Goal
 
@@ -56,7 +56,7 @@ The CLI keeps the GUI's guarantees: the same fields, the same range checks, unit
              Session (owns DatFile), Mods, GameInstall, NameProvider
 ```
 
-Every command becomes a JSON request object handled by `RequestHandler`. Tests drive the handler in-process. A later `serve` mode or MCP server would feed it the same objects (section 12).
+Every command becomes a JSON request object handled by `RequestHandler`. A request is `{"op": "info"}` plus the fields that op uses. Source options are not in the request; the caller passes them beside it, because `batch` shares one open. Tests drive the handler in-process. A later `serve` mode or MCP server would feed it the same objects (section 12).
 
 ### 4.1 Refactor first (no change in behaviour)
 
@@ -167,6 +167,22 @@ newage-cli lookup resource                 # the whole table: 0 Food Storage, 1 
 **Field keys stay textual.** Fields have no natural number: a number would be the descriptor's position, which shifts whenever a field is added, and a wrong number would silently edit a different field. A mistyped key fails with `unknown_field`. `schema` lists every key with its display name and type.
 
 ### 6.2 Output shapes
+
+`info` reports the open source. `version` is the profile key; `fileVersion` is the string stored in the file. `counts` are each kind's count, with units counted in civ 0 (the copy the GUI status line reads from the first civ). `readOnly` is true when there is no mod save path. `dat` is the file that was read, which is the game file when the mod has no copy yet. Empty `game` and `mod` mean a loose file.
+
+```json
+{
+  "game": "C:/Games/AoE2DE",
+  "dataset": "empires2_x2_p1.dat",
+  "version": "aoe2de",
+  "fileVersion": "VER 5.8",
+  "mod": "",
+  "dat": "C:/Games/AoE2DE/resources/_common/dat/empires2_x2_p1.dat",
+  "readOnly": true,
+  "counts": {"civ": 43, "unit": 1400, "tech": 800, "effect": 700},
+  "kinds": ["civ", "unit", "tech", "effect"]
+}
+```
 
 `get unit 4 --civ 1 --fields hit_points,cost*`:
 
