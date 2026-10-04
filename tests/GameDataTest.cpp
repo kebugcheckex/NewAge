@@ -1,10 +1,13 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTest>
 
 #include "core/GameInstall.h"
+#include "core/Mods.h"
 #include "core/NameProvider.h"
 #include "core/Session.h"
 #include "core/SpriteLibrary.h"
@@ -58,6 +61,12 @@ private slots:
     void detectsDllLayoutCaseInsensitively();
     void detectsNothingElsewhere();
     void openDatasetLoadsNames();
+    void modsFoldersFollowLayout();
+    void checkModTitles();
+    void createAndFindMods();
+    void editModInfoKeepsOtherKeys();
+    void modDatasetUsesModFiles();
+    void saveIntoNewMod();
     void realInstall();
     void techIconSlpFollowsVersion();
     void unitIconSlpFollowsVersion();
@@ -235,7 +244,18 @@ void GameDataTest::openDatasetLoadsNames()
     QStringList warnings;
     const GameDataset dataset{QStringLiteral("sample"), QStringLiteral("tc"), tcDat,
                               {QStringLiteral("missing.txt"), kSampleStrings}};
-    QVERIFY2(session.open(dataset, &error, &warnings), qPrintable(error));
+    int steps = 0;
+    int reportedCount = 0;
+    LoadResult loaded = Session::read(dataset, [&](int, int count) {
+        ++steps;
+        reportedCount = count;
+    });
+    QCOMPARE(opened, 0);
+    QCOMPARE(reportedCount, 1 + dataset.languageFiles.size());
+    QCOMPARE(steps, reportedCount);
+    QVERIFY2(loaded.ok, qPrintable(loaded.error));
+    warnings = loaded.warnings;
+    session.adopt(std::move(loaded));
     QCOMPARE(opened, 1);
     // Names are there by the time views hear about the data.
     QCOMPARE(nameOnOpened, QStringLiteral("Castle"));
@@ -255,6 +275,199 @@ void GameDataTest::openDatasetLoadsNames()
     QVERIFY(!session.open(GameDataset{{}, QStringLiteral("nope"), tcDat, {}}, &error));
     QVERIFY(!session.isOpen());
     QVERIFY(error.contains(QStringLiteral("nope")));
+}
+
+void GameDataTest::modsFoldersFollowLayout()
+{
+    QTemporaryDir hd;
+    QVERIFY(hd.isValid());
+    QVERIFY(writeFile(hd.path(), QStringLiteral("resources/_common/dat/empires2_x1_p1.dat")));
+    QVERIFY(writeFile(hd.path(), QStringLiteral("resources/_common/dat/empires2_x2_p1.dat")));
+    const QList<GameDataset> hdSets = detectInstall(hd.path());
+    QCOMPARE(hdSets.size(), 2);
+    for (const GameDataset &dataset : hdSets)
+    {
+        QCOMPARE(dataset.gameDir, QDir(hd.path()).absolutePath());
+        QVERIFY(supportsMods(dataset));
+        QCOMPARE(modsFolders(dataset), QStringList{QDir(hd.path()).filePath(QStringLiteral("mods"))});
+    }
+
+    // DE: in the user profile, one mods folder per player profile that has
+    // one. The one the game keeps mod-status.json in goes first, ahead of the
+    // "0" profile from before signing in.
+    QTemporaryDir de;
+    QTemporaryDir home;
+    QVERIFY(de.isValid() && home.isValid());
+    QVERIFY(writeFile(de.path(), QStringLiteral("resources/_common/dat/empires2_x2_p1.dat")));
+    const QString games = QStringLiteral("Games/Age of Empires 2 DE/");
+    QVERIFY(QDir(home.path()).mkpath(games + QStringLiteral("0/mods/local")));
+    QVERIFY(writeFile(home.path(), games + QStringLiteral("76561190000000001/mods/mod-status.json"), "{}"));
+    QVERIFY(QDir(home.path()).mkpath(games + QStringLiteral("76561190000000002/savegame")));
+    QVERIFY(QDir(home.path()).mkpath(games + QStringLiteral("logs")));
+    const GameDataset deSet = detectInstall(de.path()).at(0);
+    QVERIFY(supportsMods(deSet));
+    const QStringList expected = {QDir(home.path()).filePath(games + QStringLiteral("76561190000000001/mods/local")),
+                                  QDir(home.path()).filePath(games + QStringLiteral("0/mods/local"))};
+    QCOMPARE(modsFolders(deSet, home.path()), expected);
+
+    // The CD-era games have no mod folders, TC included.
+    QTemporaryDir tc;
+    QVERIFY(tc.isValid());
+    QVERIFY(writeFile(tc.path(), QStringLiteral("data/empires2_x1_p1.dat")));
+    const GameDataset tcSet = detectInstall(tc.path()).at(0);
+    QCOMPARE(tcSet.versionKey, QStringLiteral("tc"));
+    QVERIFY(!supportsMods(tcSet));
+    QVERIFY(modsFolders(tcSet).isEmpty());
+    QVERIFY(!supportsMods(GameDataset{{}, QStringLiteral("aokhd"), hdSets.at(0).datPath, {}}));
+}
+
+void GameDataTest::checkModTitles()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QVERIFY(QDir(dir.path()).mkdir(QStringLiteral("Existing Mod")));
+
+    QVERIFY(checkModTitle(dir.path(), QStringLiteral("My Balance Mod")).isEmpty());
+    // The folder doesn't have to exist yet.
+    QVERIFY(checkModTitle(dir.filePath(QStringLiteral("missing")), QStringLiteral("My Balance Mod")).isEmpty());
+    for (const char *bad : {"", "   ", " leading", "trailing ", "dot.", "a/b", "a\\b", "what?", "a:b", "CON", "nul.txt",
+                            "existing mod"})
+        QVERIFY2(!checkModTitle(dir.path(), QString::fromLatin1(bad)).isEmpty(), bad);
+    QVERIFY(checkModTitle(dir.path(), QStringLiteral("Console")).isEmpty());
+}
+
+void GameDataTest::createAndFindMods()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString folder = dir.filePath(QStringLiteral("mods"));
+    QVERIFY(findMods(folder).isEmpty());
+
+    QString error;
+    const QString modDir = createMod(
+        folder, {QStringLiteral("Zebra Balance"), QStringLiteral("Someone"), QStringLiteral("Line one\nLine two")},
+        &error);
+    QVERIFY2(!modDir.isEmpty(), qPrintable(error));
+    QCOMPARE(QFileInfo(modDir).fileName(), QStringLiteral("Zebra Balance"));
+    QFile info(QDir(modDir).filePath(QStringLiteral("info.json")));
+    QVERIFY(info.open(QIODevice::ReadOnly));
+    const QJsonObject json = QJsonDocument::fromJson(info.readAll()).object();
+    QCOMPARE(json.value(QStringLiteral("Title")).toString(), QStringLiteral("Zebra Balance"));
+    QCOMPARE(json.value(QStringLiteral("Author")).toString(), QStringLiteral("Someone"));
+    QCOMPARE(json.value(QStringLiteral("Description")).toString(), QStringLiteral("Line one\nLine two"));
+    // The keys DE writes for its own local mods, and no others.
+    QCOMPARE(json.keys(), (QStringList{QStringLiteral("Author"), QStringLiteral("CacheStatus"),
+                                       QStringLiteral("Description"), QStringLiteral("Title")}));
+    QCOMPARE(json.value(QStringLiteral("CacheStatus")).toInt(-1), 0);
+
+    // A second one with the same name (any case) is refused.
+    QVERIFY(createMod(folder, {QStringLiteral("zebra balance"), {}, {}}, &error).isEmpty());
+    QVERIFY(error.contains(QStringLiteral("already")));
+
+    // A folder without info.json is listed under its folder name.
+    QVERIFY(QDir(folder).mkdir(QStringLiteral("apple")));
+    const QList<Mod> mods = findMods(folder);
+    QCOMPARE(mods.size(), 2);
+    QCOMPARE(mods.at(0).info.title, QStringLiteral("apple"));
+    QVERIFY(mods.at(0).info.author.isEmpty());
+    QCOMPARE(mods.at(1).info.title, QStringLiteral("Zebra Balance"));
+    QCOMPARE(mods.at(1).info.author, QStringLiteral("Someone"));
+    QCOMPARE(mods.at(1).dir, modDir);
+}
+
+void GameDataTest::editModInfoKeepsOtherKeys()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    // Like a mod DE downloaded, with more keys than NewAge writes.
+    QVERIFY(writeFile(dir.path(), QStringLiteral("Downloaded/info.json"),
+                      R"({"Author":"Them","CacheStatus":1,"Description":"Old","ModId":12345,"Title":"Old Name"})"));
+    const QString modDir = dir.filePath(QStringLiteral("Downloaded"));
+    QCOMPARE(readModInfo(modDir).title, QStringLiteral("Old Name"));
+
+    QString error;
+    QVERIFY2(writeModInfo(modDir, {QStringLiteral("New Name"), QStringLiteral("Me"), QStringLiteral("New")}, &error),
+             qPrintable(error));
+    QFile info(QDir(modDir).filePath(QStringLiteral("info.json")));
+    QVERIFY(info.open(QIODevice::ReadOnly));
+    const QJsonObject json = QJsonDocument::fromJson(info.readAll()).object();
+    QCOMPARE(json.value(QStringLiteral("Title")).toString(), QStringLiteral("New Name"));
+    QCOMPARE(json.value(QStringLiteral("Author")).toString(), QStringLiteral("Me"));
+    QCOMPARE(json.value(QStringLiteral("Description")).toString(), QStringLiteral("New"));
+    QCOMPARE(json.value(QStringLiteral("CacheStatus")).toInt(), 1);
+    QCOMPARE(json.value(QStringLiteral("ModId")).toInt(), 12345);
+    // The folder keeps its name.
+    QCOMPARE(findMods(dir.path()).at(0).dir, QDir::cleanPath(modDir));
+    QCOMPARE(findMods(dir.path()).at(0).info.title, QStringLiteral("New Name"));
+
+    // No folder lists nothing (not the current directory).
+    QVERIFY(findMods(QString()).isEmpty());
+}
+
+void GameDataTest::modDatasetUsesModFiles()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(writeFile(game.path(), QStringLiteral("resources/_common/dat/empires2_x2_p1.dat")));
+    QVERIFY(writeFile(game.path(), QStringLiteral("resources/en/strings/key-value/key-value-strings-utf8.txt")));
+    const GameDataset dataset = detectInstall(game.path()).at(0);
+    const QString modDir = QDir(game.path()).filePath(QStringLiteral("mods/My Mod"));
+    QVERIFY(writeFile(modDir, QStringLiteral("resources/en/strings/key-value/key-value-modded-strings-utf8.txt")));
+
+    const QString modDat = modDatPath(dataset, modDir);
+    QCOMPARE(modDat, QDir(modDir).filePath(QStringLiteral("resources/_common/dat/empires2_x2_p1.dat")));
+    QVERIFY(isGameDataFile(dataset, dataset.datPath));
+    QVERIFY(!isGameDataFile(dataset, modDat));
+    QVERIFY(!isGameDataFile(GameDataset{}, dataset.datPath));
+
+    const GameDataset mod = modDataset(dataset, modDir, QStringLiteral("en"));
+    QCOMPARE(mod.datPath, modDat);
+    QCOMPARE(mod.versionKey, dataset.versionKey);
+    QCOMPARE(mod.gameDir, dataset.gameDir);
+    QVERIFY(mod.title.startsWith(QStringLiteral("My Mod: ")));
+    // The mod's strings win over the game's.
+    QCOMPARE(mod.languageFiles.size(), 2);
+    QVERIFY(mod.languageFiles.at(0).startsWith(modDir));
+    QCOMPARE(mod.languageFiles.at(1), dataset.languageFiles.at(0));
+    QVERIFY(supportsMods(mod));
+}
+
+// The steps File > Save to Mod takes: a new mod, its dat folder, then a save
+// that leaves the game's file alone.
+void GameDataTest::saveIntoNewMod()
+{
+    const QString hdDat = QStringLiteral(NEWAGE_SAMPLE_DATA_DIR "/empires2_x2_p1.dat");
+    if (!QFile::exists(hdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    const QString gameDat = game.filePath(QStringLiteral("resources/_common/dat/empires2_x2_p1.dat"));
+    QVERIFY(QDir().mkpath(QFileInfo(gameDat).absolutePath()));
+    QVERIFY(QFile::copy(hdDat, gameDat));
+    QVERIFY(writeFile(game.path(), QStringLiteral("resources/_common/dat/empires2_x1_p1.dat")));
+    const GameDataset dataset = detectInstall(game.path()).at(0);
+    QCOMPARE(dataset.versionKey, QStringLiteral("aokhd"));
+
+    Session session;
+    QString error;
+    QVERIFY2(session.open(dataset, &error), qPrintable(error));
+    const auto original = session.dat()->Civs.at(1).Units.at(82).HitPoints;
+    session.dat()->Civs.at(1).Units.at(82).HitPoints = original + 1;
+
+    const QString modDir = createMod(modsFolders(dataset).at(0), {QStringLiteral("My Balance Mod"), {}, {}}, &error);
+    QVERIFY2(!modDir.isEmpty(), qPrintable(error));
+    const QString modDat = modDatPath(dataset, modDir);
+    QVERIFY(QDir().mkpath(QFileInfo(modDat).absolutePath()));
+    QVERIFY2(session.saveAs(modDat, &error), qPrintable(error));
+    QCOMPARE(QDir::fromNativeSeparators(modDat),
+             game.filePath(QStringLiteral("mods/My Balance Mod/resources/_common/dat/empires2_x2_p1.dat")));
+
+    Session reopened;
+    QVERIFY2(reopened.open(modDataset(dataset, modDir, QStringLiteral("en")), &error), qPrintable(error));
+    QCOMPARE(reopened.dat()->Civs.at(1).Units.at(82).HitPoints, original + 1);
+    QVERIFY2(reopened.open(dataset, &error), qPrintable(error));
+    QCOMPARE(reopened.dat()->Civs.at(1).Units.at(82).HitPoints, original);
 }
 
 // Runs on a real game folder when NEWAGE_TEST_GAME_DIR is set: every data set
@@ -351,6 +564,17 @@ void GameDataTest::spriteSourceFollowsInstallLayout()
         QDir(dir.path()).filePath(QStringLiteral("resources/_common/dat/empires2_x2_p1.dat")), genie::GV_Cysion);
     QVERIFY(folderName(hd.looseFolder) == QStringLiteral("drs"));
     QVERIFY(hd.drsFolders.isEmpty());
+
+    // A DE mod's .dat is in the user profile, outside the install, so only
+    // the game folder finds the sprites.
+    QTemporaryDir profile;
+    QVERIFY(profile.isValid());
+    const QString modDat = QStringLiteral("mods/local/My Mod/resources/_common/dat/empires2_x2_p1.dat");
+    QVERIFY(writeFile(profile.path(), modDat));
+    const QString modDatPath = QDir(profile.path()).filePath(modDat);
+    QVERIFY(locateSpriteSource(modDatPath, genie::GV_C32).isEmpty());
+    const SpriteSource mod = locateSpriteSource(modDatPath, genie::GV_C32, dir.path());
+    QCOMPARE(mod.looseFolder, hd.looseFolder);
 
     QVERIFY(writeFile(dir.path(), QStringLiteral("Data/empires.dat")));
     QVERIFY(writeFile(dir.path(), QStringLiteral("Data/DRS/interfac.drs"), QByteArray(8, '\0')));

@@ -14,6 +14,7 @@ struct GameDataset
     QString versionKey;     // VersionProfile key.
     QString datPath;        // Absolute.
     QStringList languageFiles; // Absolute, highest priority first; only files that exist.
+    QString gameDir;        // Absolute game folder the data set was found in.
 };
 
 // Finds the data sets in a game installation folder by looking for the data
@@ -23,6 +24,10 @@ struct GameDataset
 //
 // `locale` picks the language folder for games that ship several (HD, DE).
 QList<GameDataset> detectInstall(const QString &dir, const QString &locale = QStringLiteral("en"));
+
+// HD / DE key-value string files under `dir`/resources/<locale>, highest
+// priority first. `dir` is a game folder or a mod folder with the same layout.
+QStringList keyValueFiles(const QString &dir, const QString &locale);
 
 // The .dat paths detectInstall() looks for, relative to the game folder, for
 // telling the user what was expected.

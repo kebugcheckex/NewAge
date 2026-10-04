@@ -25,6 +25,8 @@ add_library(newage_core STATIC
   src/core/Config.h
   src/core/GameInstall.cpp
   src/core/GameInstall.h
+  src/core/Mods.cpp
+  src/core/Mods.h
   src/core/NameProvider.cpp
   src/core/NameProvider.h
   src/core/Session.cpp
@@ -96,6 +98,10 @@ add_library(newage_ui STATIC
   src/ui/EntityBrowser.h
   src/ui/MainWindow.cpp
   src/ui/MainWindow.h
+  src/ui/ModsDialog.cpp
+  src/ui/ModsDialog.h
+  src/ui/ModsPanel.cpp
+  src/ui/ModsPanel.h
   src/ui/OptionsDialog.cpp
   src/ui/OptionsDialog.h
 )

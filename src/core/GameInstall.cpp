@@ -54,31 +54,6 @@ QString titleFor(const QString &versionKey, const QString &datPath)
                                          QFileInfo(datPath).fileName());
 }
 
-// HD and DE: resources/_common/dat/*.dat, strings in resources/<locale>/.
-// The modded file overrides the base one. DE also ships extra files (the
-// Chronicles strings, campaigns) whose IDs don't overlap the base file; they
-// go last, in name order.
-QStringList keyValueFiles(const QString &dir, const QString &locale)
-{
-    const QString folder = findPath(dir, QStringLiteral("resources/%1/strings/key-value").arg(locale));
-    if (folder.isEmpty())
-        return {};
-
-    const QString modded = QStringLiteral("key-value-modded-strings-utf8.txt");
-    const QString base = QStringLiteral("key-value-strings-utf8.txt");
-    QStringList files;
-    QStringList extra;
-    const QStringList entries = QDir(folder).entryList({QStringLiteral("*key-value*strings-utf8.txt")},
-                                                      QDir::Files, QDir::Name | QDir::IgnoreCase);
-    for (const QString &entry : entries)
-    {
-        if (entry.compare(modded, Qt::CaseInsensitive) != 0 && entry.compare(base, Qt::CaseInsensitive) != 0)
-            extra.append(QDir(folder).filePath(entry));
-    }
-    files << findPaths(folder, {modded, base}) << extra;
-    return files;
-}
-
 void detectHdOrDe(const QString &dir, const QString &locale, QList<GameDataset> *datasets)
 {
     const QString x2 = findPath(dir, QStringLiteral("resources/_common/dat/empires2_x2_p1.dat"));
@@ -125,26 +100,17 @@ const QList<DllLayout> &dllLayouts()
     return layouts;
 }
 
-} // namespace
-
-QList<GameDataset> detectInstall(const QString &dir, const QString &locale)
+// AoE DE, then the games with language DLLs.
+void detectOlder(const QString &dir, const QString &locale, QList<GameDataset> *datasets)
 {
-    QList<GameDataset> datasets;
-    if (!QFileInfo(dir).isDir())
-        return datasets;
-
-    detectHdOrDe(dir, locale, &datasets);
-    if (!datasets.isEmpty())
-        return datasets;
-
     // AoE DE keeps the original AoE .dat path, so check it before AoE.
     const QString aoeDeStrings = findPath(dir, QStringLiteral("data/Localization/%1/strings.txt").arg(locale));
     const QString aoeDeDat = findPath(dir, QStringLiteral("data/empires.dat"));
     if (!aoeDeStrings.isEmpty() && !aoeDeDat.isEmpty())
     {
-        datasets.append({titleFor(QStringLiteral("aoede"), aoeDeDat), QStringLiteral("aoede"), aoeDeDat,
-                         {aoeDeStrings}});
-        return datasets;
+        datasets->append({titleFor(QStringLiteral("aoede"), aoeDeDat), QStringLiteral("aoede"), aoeDeDat,
+                          {aoeDeStrings}});
+        return;
     }
 
     for (const DllLayout &layout : dllLayouts())
@@ -153,8 +119,49 @@ QList<GameDataset> detectInstall(const QString &dir, const QString &locale)
         if (dat.isEmpty())
             continue;
         const QString key = QString::fromLatin1(layout.versionKey);
-        datasets.append({titleFor(key, dat), key, dat, findPaths(dir, layout.languageFiles)});
+        datasets->append({titleFor(key, dat), key, dat, findPaths(dir, layout.languageFiles)});
     }
+}
+
+} // namespace
+
+// HD and DE: resources/_common/dat/*.dat, strings in resources/<locale>/.
+// The modded file overrides the base one. DE also ships extra files (the
+// Chronicles strings, campaigns) whose IDs don't overlap the base file; they
+// go last, in name order.
+QStringList keyValueFiles(const QString &dir, const QString &locale)
+{
+    const QString folder = findPath(dir, QStringLiteral("resources/%1/strings/key-value").arg(locale));
+    if (folder.isEmpty())
+        return {};
+
+    const QString modded = QStringLiteral("key-value-modded-strings-utf8.txt");
+    const QString base = QStringLiteral("key-value-strings-utf8.txt");
+    QStringList files;
+    QStringList extra;
+    const QStringList entries = QDir(folder).entryList({QStringLiteral("*key-value*strings-utf8.txt")},
+                                                      QDir::Files, QDir::Name | QDir::IgnoreCase);
+    for (const QString &entry : entries)
+    {
+        if (entry.compare(modded, Qt::CaseInsensitive) != 0 && entry.compare(base, Qt::CaseInsensitive) != 0)
+            extra.append(QDir(folder).filePath(entry));
+    }
+    files << findPaths(folder, {modded, base}) << extra;
+    return files;
+}
+
+QList<GameDataset> detectInstall(const QString &dir, const QString &locale)
+{
+    QList<GameDataset> datasets;
+    if (!QFileInfo(dir).isDir())
+        return datasets;
+
+    detectHdOrDe(dir, locale, &datasets);
+    if (datasets.isEmpty())
+        detectOlder(dir, locale, &datasets);
+    const QString gameDir = QDir(dir).absolutePath();
+    for (GameDataset &dataset : datasets)
+        dataset.gameDir = gameDir;
     return datasets;
 }
 

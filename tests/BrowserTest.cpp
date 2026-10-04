@@ -1,17 +1,25 @@
 #include <memory>
 
 #include <QCheckBox>
+#include <QDialogButtonBox>
+#include <QDir>
+#include <QLabel>
 #include <QComboBox>
 #include <QFile>
 #include <QLineEdit>
 #include <QListView>
+#include <QListWidget>
+#include <QMenu>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QToolButton>
 #include <QTreeView>
 
 #include "core/Config.h"
+#include "core/Mods.h"
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
@@ -19,7 +27,10 @@
 #include "model/FieldTreeModel.h"
 #include "model/TechListModel.h"
 #include "model/UnitListModel.h"
+#include "model/UnitNames.h"
 #include "ui/EntityBrowser.h"
+#include "ui/ModsDialog.h"
+#include "ui/ModsPanel.h"
 #include "ui/OptionsDialog.h"
 
 using namespace newage;
@@ -119,6 +130,9 @@ private slots:
     void doubleClickEffectSelectsIt();
     void editFields();
     void optionsDialogEditsConfig();
+    void modsPanelListsMods();
+    void saveAsModDialogListsMods();
+    void modInfoDialogChecksTitle();
 
 private:
     QTemporaryDir dir_;
@@ -373,6 +387,97 @@ void BrowserTest::editFields()
     // The current cell stays on the value column, where F2 edits it.
     fields->setCurrentIndex(hp.siblingAtColumn(FieldTreeModel::NameColumn));
     QCOMPARE(fields->currentIndex(), hp);
+
+    // A required tech edits as a combo of every other tech, label and ID.
+    const auto techs = techBrowser(&session, &config);
+    auto *techList = techs->findChild<QListView *>();
+    auto *techFields = techs->findChild<QTreeView *>();
+    selectId(techList, 22);
+    const QModelIndex required = valueIndex(techFields, QStringLiteral("Required tech 1"));
+    QVERIFY(required.flags() & Qt::ItemIsEditable);
+    QVERIFY(!(valueIndex(techFields, QStringLiteral("Required tech count")).flags() & Qt::ItemIsEditable));
+    QAbstractItemDelegate *techDelegate = techFields->itemDelegateForIndex(required);
+    editor.reset(techDelegate->createEditor(techFields->viewport(), QStyleOptionViewItem(), required));
+    auto *combo = qobject_cast<QComboBox *>(editor.get());
+    QVERIFY(combo);
+    auto *techModel = qobject_cast<TechListModel *>(techs->model());
+    QVERIFY(techModel);
+    QCOMPARE(combo->count(), techModel->rowCount() - 1);
+    QVERIFY(combo->findData(22) < 0);
+    const int darkAge = combo->findData(104);
+    QVERIFY(darkAge >= 0);
+    QCOMPARE(combo->itemText(darkAge), QStringLiteral("%1 (%2)").arg(techModel->name(104)).arg(104));
+    for (int i = 0; i < combo->count(); ++i)
+    {
+        const int id = combo->itemData(i).toInt();
+        QVERIFY(id != 22);
+        QCOMPARE(combo->itemText(i), QStringLiteral("%1 (%2)").arg(techModel->name(id)).arg(id));
+    }
+    techDelegate->setEditorData(combo, required);
+    QCOMPARE(combo->currentData().toInt(), 104);
+    const int feudal = combo->findData(101);
+    QVERIFY(feudal >= 0);
+    combo->setCurrentIndex(feudal);
+    techDelegate->setModelData(combo, techFields->model(), required);
+    QCOMPARE(session.dat()->Techs.at(22).RequiredTechs.at(0), int16_t(101));
+    QCOMPARE(shownValue(techFields, QStringLiteral("Required tech 1")),
+             QStringLiteral("%1 (101)").arg(techModel->name(101)));
+
+    // The same filter that hides unavailable techs takes them out of the combo.
+    config.setHideUnavailableTechs(true);
+    editor.reset(techDelegate->createEditor(techFields->viewport(), QStyleOptionViewItem(), required));
+    combo = qobject_cast<QComboBox *>(editor.get());
+    QVERIFY(combo);
+    int available = 0;
+    for (int id = 0; id < techModel->rowCount(); ++id)
+        available += techModel->index(id).data(EntityListModel::ActiveRole).toBool();
+    QCOMPARE(combo->count(), available - 1);
+    QVERIFY(combo->findData(59) < 0);
+    QVERIFY(combo->findData(85) < 0);
+    QVERIFY(combo->findData(22) < 0);
+    QVERIFY(combo->findData(3) >= 0);
+    QVERIFY(combo->findData(101) >= 0);
+
+    // Research location edits as a combo of the current civ's buildings.
+    const QModelIndex location = valueIndex(techFields, QStringLiteral("Location"));
+    QVERIFY(location.flags() & Qt::ItemIsEditable);
+    editor.reset(techDelegate->createEditor(techFields->viewport(), QStyleOptionViewItem(), location));
+    combo = qobject_cast<QComboBox *>(editor.get());
+    QVERIFY(combo);
+    const int civ = techs->model()->civ();
+    const genie::Civ &selected = session.dat()->Civs.at(civ);
+    QList<int> buildings;
+    const int unitCount = static_cast<int>(selected.Units.size());
+    const int pointerCount = static_cast<int>(selected.UnitPointers.size());
+    for (int id = 0; id < unitCount && id < pointerCount; ++id)
+    {
+        if (selected.UnitPointers[id] != 0 && selected.Units[id].Type == genie::UT_Building)
+            buildings.append(id);
+    }
+    QVERIFY(buildings.size() > 1);
+    QCOMPARE(combo->count(), buildings.size());
+    QVERIFY(!buildings.contains(4));
+    QVERIFY(buildings.contains(109));
+    for (int i = 0; i < combo->count(); ++i)
+    {
+        const int id = combo->itemData(i).toInt();
+        QCOMPARE(id, buildings.at(i));
+        QString label = unitName(session, civ, id);
+        if (label.isEmpty())
+            label = QStringLiteral("(unnamed)");
+        QCOMPARE(combo->itemText(i), QStringLiteral("%1 (%2)").arg(label).arg(id));
+    }
+    techDelegate->setEditorData(combo, location);
+    QCOMPARE(combo->currentData().toInt(), 109);
+    const int other = buildings.at(0) == 109 ? buildings.at(1) : buildings.at(0);
+    combo->setCurrentIndex(combo->findData(other));
+    techDelegate->setModelData(combo, techFields->model(), location);
+    QCOMPARE(session.dat()->Techs.at(22).ResearchLocations.front().LocationID, int16_t(other));
+    const QString otherName = unitName(session, civ, other);
+    QCOMPARE(shownValue(techFields, QStringLiteral("Location")),
+             QStringLiteral("%1 (%2)").arg(otherName.isEmpty() ? QStringLiteral("(unnamed)") : otherName).arg(other));
+    // The combo is parented to the view; drop it before the browser does.
+    editor.reset();
 }
 
 void BrowserTest::optionsDialogEditsConfig()
@@ -407,6 +512,178 @@ void BrowserTest::optionsDialogEditsConfig()
     OptionsDialog dialog(&config);
     QVERIFY(dialog.findChild<QCheckBox *>(QStringLiteral("hideEmptyUnits"))->isChecked());
     QVERIFY(dialog.findChild<QCheckBox *>(QStringLiteral("hideUnavailableTechs"))->isChecked());
+}
+
+// An HD game folder with two mods: Balance, with its own .dat, and Empty,
+// without. Returns the game's data set.
+static GameDataset makeModdedGame(const QTemporaryDir &game)
+{
+    const GameDataset dataset{QStringLiteral("HD"), QStringLiteral("aokhd"),
+                              game.filePath(QStringLiteral("resources/_common/dat/empires2_x2_p1.dat")), {},
+                              game.path()};
+    const QString folder = game.filePath(QStringLiteral("mods"));
+    const QString withData = createMod(folder, {QStringLiteral("Balance"), QStringLiteral("Me"), {}});
+    const QString modDat = modDatPath(dataset, withData);
+    QDir().mkpath(QFileInfo(modDat).absolutePath());
+    QFile dat(modDat);
+    if (dat.open(QIODevice::WriteOnly))
+        dat.close();
+    createMod(folder, {QStringLiteral("Empty"), {}, {}});
+    return dataset;
+}
+
+void BrowserTest::modsPanelListsMods()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    const GameDataset dataset = makeModdedGame(game);
+    const QString folder = QDir::cleanPath(game.filePath(QStringLiteral("mods")));
+    const QString balance = QDir(folder).filePath(QStringLiteral("Balance"));
+    const QString empty = QDir(folder).filePath(QStringLiteral("Empty"));
+
+    ModsPanel panel;
+    panel.setGame(dataset, QString());
+    QCOMPARE(panel.modsFolder(), folder);
+    auto *mods = panel.findChild<QListWidget *>(QStringLiteral("mods"));
+    auto *edit = panel.findChild<QPushButton *>(QStringLiteral("editMod"));
+    auto *details = panel.findChild<QLabel *>(QStringLiteral("modDetails"));
+    auto *more = panel.findChild<QToolButton *>(QStringLiteral("modActions"));
+    QVERIFY(mods && edit && details && more);
+    QAction *saveHere = more->menu()->actions().at(0);
+
+    // The game's own data, then the mods by title. Empty, without a .dat, is
+    // dimmed and says so.
+    QCOMPARE(mods->count(), 3);
+    QVERIFY(panel.gameDataSelected());
+    QVERIFY(mods->item(0)->text().startsWith(QStringLiteral("Game data")));
+    QCOMPARE(mods->item(1)->text(), QStringLiteral("Balance"));
+    QCOMPARE(mods->item(2)->text(), QStringLiteral("Empty"));
+    QVERIFY(mods->item(1)->toolTip().isEmpty());
+    QVERIFY(!mods->item(2)->toolTip().isEmpty());
+    QVERIFY(edit->isEnabled());
+
+    QSignalSpy edits(&panel, &ModsPanel::editRequested);
+    mods->setCurrentRow(1);
+    QCOMPARE(panel.selectedModDir(), balance);
+    QVERIFY(details->text().contains(QStringLiteral("by Me")));
+    QVERIFY(!saveHere->isEnabled()); // No data open.
+    emit mods->itemActivated(mods->currentItem());
+    QCOMPARE(edits.size(), 1);
+    QCOMPARE(edits.at(0).at(0).toString(), balance);
+
+    // Editing Balance marks it, and Edit and Save Here are off for it.
+    panel.setDataOpen(true);
+    panel.setEdited(ModsPanel::Edited::Mod, balance);
+    QVERIFY(mods->item(1)->font().bold());
+    QVERIFY(mods->item(1)->text().endsWith(QStringLiteral("Balance")));
+    QVERIFY(mods->item(1)->text() != QStringLiteral("Balance"));
+    QVERIFY(!edit->isEnabled());
+    QVERIFY(!saveHere->isEnabled());
+    edit->click();
+    QCOMPARE(edits.size(), 1);
+
+    // Selecting another row only shows it.
+    mods->setCurrentRow(2);
+    QCOMPARE(panel.selectedModDir(), empty);
+    QVERIFY(edit->isEnabled());
+    QVERIFY(saveHere->isEnabled());
+    QVERIFY(details->text().contains(QStringLiteral("starts from the game data")));
+    QSignalSpy saves(&panel, &ModsPanel::saveHereRequested);
+    saveHere->trigger();
+    QCOMPARE(saves.size(), 1);
+    QCOMPARE(saves.at(0).at(0).toString(), empty);
+    edit->click();
+    QCOMPARE(edits.size(), 2);
+    QCOMPARE(edits.at(1).at(0).toString(), empty);
+
+    // A reload keeps the selection and the mark.
+    panel.reload();
+    QCOMPARE(panel.selectedModDir(), empty);
+    QVERIFY(mods->item(1)->font().bold());
+
+    // Editing the game data selects and marks its row.
+    panel.setEdited(ModsPanel::Edited::GameData);
+    QVERIFY(panel.gameDataSelected());
+    QVERIFY(mods->item(0)->font().bold());
+    QVERIFY(!mods->item(1)->font().bold());
+    QVERIFY(!edit->isEnabled());
+
+    // A mods folder that doesn't exist yet lists only the game data.
+    ModsPanel missing;
+    missing.setGame(dataset, game.filePath(QStringLiteral("elsewhere")));
+    QCOMPARE(missing.findChild<QListWidget *>(QStringLiteral("mods"))->count(), 1);
+}
+
+void BrowserTest::saveAsModDialogListsMods()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    const GameDataset dataset = makeModdedGame(game);
+    const QString folder = QDir::cleanPath(game.filePath(QStringLiteral("mods")));
+    const QString empty = QDir(folder).filePath(QStringLiteral("Empty"));
+
+    SaveAsModDialog dialog(dataset, folder, empty);
+    auto *mods = dialog.findChild<QListWidget *>(QStringLiteral("mods"));
+    auto *save = dialog.findChild<QPushButton *>(QStringLiteral("saveToMod"));
+    auto *details = dialog.findChild<QLabel *>(QStringLiteral("modDetails"));
+    QVERIFY(mods && save && details);
+    QCOMPARE(mods->count(), 2);
+    QVERIFY(save->isDefault());
+    // The mod being edited is selected first.
+    QCOMPARE(dialog.modDir(), empty);
+    QVERIFY(save->isEnabled());
+    mods->setCurrentRow(0);
+    QVERIFY(details->text().contains(QStringLiteral("by Me")));
+    QVERIFY(details->text().contains(QStringLiteral("Has its own")));
+
+    save->click();
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.modDir(), QDir(folder).filePath(QStringLiteral("Balance")));
+
+    // An empty folder offers nothing to save into.
+    SaveAsModDialog none(dataset, game.filePath(QStringLiteral("elsewhere")));
+    QCOMPARE(none.findChild<QListWidget *>(QStringLiteral("mods"))->count(), 0);
+    QVERIFY(!none.findChild<QPushButton *>(QStringLiteral("saveToMod"))->isEnabled());
+}
+
+void BrowserTest::modInfoDialogChecksTitle()
+{
+    QVERIFY(QDir(dir_.path()).mkpath(QStringLiteral("mods/Taken")));
+    ModInfoDialog dialog(dir_.filePath(QStringLiteral("mods")), {QStringLiteral("Game data"), QStringLiteral("Open")});
+    auto *title = dialog.findChild<QLineEdit *>(QStringLiteral("modTitle"));
+    auto *start = dialog.findChild<QComboBox *>(QStringLiteral("modStart"));
+    QPushButton *ok = dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+    QVERIFY(title && start && ok);
+    QVERIFY(!ok->isEnabled());
+    title->setText(QStringLiteral("taken"));
+    QVERIFY(!ok->isEnabled());
+    title->setText(QStringLiteral("bad|name"));
+    QVERIFY(!ok->isEnabled());
+    title->setText(QStringLiteral("My Balance Mod"));
+    QVERIFY(ok->isEnabled());
+    QCOMPARE(dialog.title(), QStringLiteral("My Balance Mod"));
+    QCOMPARE(dialog.startIndex(), 0);
+    start->setCurrentIndex(1);
+    QCOMPARE(dialog.startIndex(), 1);
+
+    // No start choices, no combo.
+    ModInfoDialog plain(dir_.filePath(QStringLiteral("mods")));
+    QVERIFY(!plain.findChild<QComboBox *>(QStringLiteral("modStart")));
+    QCOMPARE(plain.startIndex(), -1);
+
+    // Editing keeps the folder, so a name like an existing folder's is fine;
+    // only an empty one isn't.
+    ModInfoDialog edit(ModInfo{QStringLiteral("Taken"), QStringLiteral("Me"), QStringLiteral("Text")});
+    auto *editTitle = edit.findChild<QLineEdit *>(QStringLiteral("modTitle"));
+    QPushButton *editOk = edit.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+    QVERIFY(editOk->isEnabled());
+    QCOMPARE(edit.info().author, QStringLiteral("Me"));
+    QCOMPARE(edit.info().description, QStringLiteral("Text"));
+    editTitle->setText(QStringLiteral("  "));
+    QVERIFY(!editOk->isEnabled());
+    editTitle->setText(QStringLiteral(" Renamed "));
+    QVERIFY(editOk->isEnabled());
+    QCOMPARE(edit.title(), QStringLiteral("Renamed"));
 }
 
 QTEST_MAIN(BrowserTest)

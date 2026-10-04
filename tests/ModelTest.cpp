@@ -21,6 +21,7 @@
 #include "model/TechListModel.h"
 #include "model/UnitFields.h"
 #include "model/UnitListModel.h"
+#include "model/UnitNames.h"
 
 using namespace newage;
 
@@ -613,11 +614,41 @@ void ModelTest::editableFieldsRoundTrip()
     tech.setGameVersion(genie::GV_TC);
     for (auto &cost : tech.ResourceCosts)
         cost.Type = 0;
+    // Unused requirement slots (-1) are left out, so fill them all.
+    std::fill(tech.RequiredTechs.begin(), tech.RequiredTechs.end(), int16_t(0));
     TechRef ref{0, tech};
     checkEditableFields(techFields(), ref,
-                        {"Cost 1 resource", "Cost 1 amount", "Cost 1 paid", "Cost 2 resource", "Cost 2 amount",
-                         "Cost 2 paid", "Cost 3 resource", "Cost 3 amount", "Cost 3 paid", "Research time"});
+                         {"Required tech 1", "Required tech 2", "Required tech 3", "Required tech 4", "Required tech 5",
+                          "Required tech 6", "Cost 1 resource", "Cost 1 amount", "Cost 1 paid", "Cost 2 resource",
+                          "Cost 2 amount", "Cost 2 paid", "Cost 3 resource", "Cost 3 amount", "Cost 3 paid",
+                          "Location", "Research time"});
+    QCOMPARE(tech.RequiredTechs.at(0), int16_t(42));
     QCOMPARE(tech.ResearchLocations.front().QueueTime, int16_t(42));
+
+    FieldTreeModel edited;
+    edited.setObject(
+        techFields(), ref, nullptr,
+        [&](int field, const QVariant &value) {
+            const FieldDesc<TechRef> &desc = techFields().at(field);
+            desc.set(ref, value);
+            return desc.get(ref);
+        },
+        [](RefKind kind, int id) {
+            if (kind == RefKind::Tech && id == 5)
+                return QStringLiteral("Wheelbarrow");
+            if (kind == RefKind::Unit && id == 109)
+                return QStringLiteral("Town Center");
+            return QString();
+        });
+    QVERIFY(edited.flags(fieldIndex(edited, QStringLiteral("Required tech 1"))) & Qt::ItemIsEditable);
+    QVERIFY(!(edited.flags(fieldIndex(edited, QStringLiteral("Required tech count"))) & Qt::ItemIsEditable));
+    QVERIFY(editField(edited, QStringLiteral("Required tech 1"), 5));
+    QCOMPARE(tech.RequiredTechs.at(0), int16_t(5));
+    QCOMPARE(fieldText(edited, QStringLiteral("Required tech 1")), QStringLiteral("Wheelbarrow (5)"));
+    QVERIFY(edited.flags(fieldIndex(edited, QStringLiteral("Location"))) & Qt::ItemIsEditable);
+    QVERIFY(editField(edited, QStringLiteral("Location"), 109));
+    QCOMPARE(tech.ResearchLocations.front().LocationID, int16_t(109));
+    QCOMPARE(fieldText(edited, QStringLiteral("Location")), QStringLiteral("Town Center (109)"));
 }
 
 void ModelTest::costFieldsSkipUnusedSlots()
@@ -784,6 +815,30 @@ void ModelTest::editAndSaveSample()
     techs.showFields(22, fields);
     QVERIFY(editField(fields, QStringLiteral("Research time"), 30));
     QVERIFY(editField(fields, QStringLiteral("Cost 1 amount"), 60));
+    QVERIFY(editField(fields, QStringLiteral("Required tech 1"), 101));
+    QCOMPARE(fieldText(fields, QStringLiteral("Required tech 1")), QStringLiteral("%1 (101)").arg(techs.name(101)));
+    QCOMPARE(session.dat()->Techs.at(22).RequiredTechs.at(0), int16_t(101));
+    int otherBuilding = -1;
+    {
+        const genie::Civ &playable = session.dat()->Civs.at(1);
+        for (int id = 0; id < static_cast<int>(playable.Units.size()); ++id)
+        {
+            if (id >= static_cast<int>(playable.UnitPointers.size()) || playable.UnitPointers[id] == 0)
+                continue;
+            if (playable.Units[id].Type == genie::UT_Building && id != 109)
+            {
+                otherBuilding = id;
+                break;
+            }
+        }
+    }
+    QVERIFY(otherBuilding >= 0);
+    QVERIFY(editField(fields, QStringLiteral("Location"), otherBuilding));
+    QCOMPARE(session.dat()->Techs.at(22).ResearchLocations.front().LocationID, int16_t(otherBuilding));
+    const QString buildingName = unitName(session, 1, otherBuilding);
+    QVERIFY(!buildingName.isEmpty());
+    QCOMPARE(fieldText(fields, QStringLiteral("Location")),
+             QStringLiteral("%1 (%2)").arg(buildingName).arg(otherBuilding));
 
     QVERIFY2(session.save(&error), qPrintable(error));
     QVERIFY(!session.isModified());
@@ -800,7 +855,9 @@ void ModelTest::editAndSaveSample()
     QCOMPARE(archer.Creatable.TrainLocations.front().QueueTime, int16_t(40));
     QCOMPARE(saved.Civs.at(2).Units.at(4).HitPoints, int16_t(30));
     QCOMPARE(saved.Techs.at(22).ResearchLocations.front().QueueTime, int16_t(30));
+    QCOMPARE(saved.Techs.at(22).ResearchLocations.front().LocationID, int16_t(otherBuilding));
     QCOMPARE(saved.Techs.at(22).ResourceCosts.at(0).Amount, int16_t(60));
+    QCOMPARE(saved.Techs.at(22).RequiredTechs.at(0), int16_t(101));
 
     // A failed save keeps the session's path and modified state.
     techs.showFields(22, fields);

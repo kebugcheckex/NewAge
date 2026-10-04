@@ -69,12 +69,12 @@ const QList<FieldDesc<TechRef>> &techFields()
         // Unused slots hold -1 and are left out.
         for (int i = 0; i < 6; ++i)
         {
-            FieldDesc<TechRef> field{QStringLiteral("Required tech %1").arg(i + 1), requirements,
-                                     [i](const TechRef &t) {
-                                         return i < static_cast<int>(t.tech.RequiredTechs.size())
-                                                && t.tech.RequiredTechs.at(i) >= 0;
-                                     },
-                                     [i](const TechRef &t) { return intValue(t.tech.RequiredTechs.at(i)); }};
+            FieldDesc<TechRef> field = numberField<TechRef>(
+                QStringLiteral("Required tech %1").arg(i + 1), requirements,
+                [i](const TechRef &t) {
+                    return i < static_cast<int>(t.tech.RequiredTechs.size()) && t.tech.RequiredTechs.at(i) >= 0;
+                },
+                [i](auto &t) -> auto & { return t.tech.RequiredTechs.at(i); });
             field.ref = RefKind::Tech;
             list.append(field);
         }
@@ -100,10 +100,11 @@ const QList<FieldDesc<TechRef>> &techFields()
         }
 
         // DE can list several locations; only the first is shown for now.
-        FieldDesc<TechRef> researchAt{QStringLiteral("Location"), location, hasLocation,
-                                      [](const TechRef &t) {
-                                          return intValue(t.tech.ResearchLocations.front().LocationID);
-                                      }};
+        // LocationID is the building. The tech browser edits it as a combo of
+        // the current civ's buildings.
+        FieldDesc<TechRef> researchAt = numberField<TechRef>(
+            QStringLiteral("Location"), location, hasLocation,
+            [](auto &t) -> auto & { return t.tech.ResearchLocations.front().LocationID; });
         researchAt.ref = RefKind::Unit;
         list.append(researchAt);
         list.append(numberField<TechRef>("Research time", location, hasLocation, [](auto &t) -> auto & {

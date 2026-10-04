@@ -1,5 +1,7 @@
 #include "ui/EntityBrowser.h"
 
+#include <functional>
+
 #include <QAbstractSlider>
 #include <QComboBox>
 #include <QFrame>
@@ -28,7 +30,9 @@
 #include "model/EntityListModel.h"
 #include "model/FieldTreeModel.h"
 #include "model/ListFilterModel.h"
+#include "model/TechListModel.h"
 #include "model/UnitListModel.h"
+#include "model/UnitNames.h"
 
 namespace newage {
 
@@ -50,23 +54,138 @@ protected:
     }
 };
 
-// Editors for field values: the default ones (a spin box for ints, a line edit
-// for floats, which edit as text), with int spin boxes limited to the field's
-// range.
+// "Dark Age (104)": the human-readable label and the ID.
+QString choiceText(const QString &label, int id)
+{
+    return QStringLiteral("%1 (%2)").arg(label).arg(id);
+}
+
+// Editors for field values: a spin box for ints (limited to the field's range),
+// a line edit for floats, a combo of the other techs for a required tech, and
+// a combo of the current civ's buildings for a research location.
 class FieldValueDelegate : public QStyledItemDelegate
 {
 public:
-    using QStyledItemDelegate::QStyledItemDelegate;
+    FieldValueDelegate(Session *session, EntityListModel *list, ListFilterModel *filter, std::function<int()> selfId,
+                       QObject *parent = nullptr)
+        : QStyledItemDelegate(parent), session_(session), list_(list), filter_(filter), selfId_(std::move(selfId))
+    {
+    }
 
     QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option,
                           const QModelIndex &index) const override
     {
+        if (QComboBox *combo = techCombo(parent, index))
+            return combo;
+        if (QComboBox *combo = buildingCombo(parent, index))
+            return combo;
         QWidget *editor = QStyledItemDelegate::createEditor(parent, option, index);
         if (auto *spin = qobject_cast<QSpinBox *>(editor))
             spin->setRange(index.data(FieldTreeModel::MinimumRole).toInt(),
                            index.data(FieldTreeModel::MaximumRole).toInt());
         return editor;
     }
+
+    void setEditorData(QWidget *editor, const QModelIndex &index) const override
+    {
+        if (auto *combo = qobject_cast<QComboBox *>(editor))
+        {
+            const int row = combo->findData(index.data(FieldTreeModel::ValueRole).toInt());
+            combo->setCurrentIndex(row);
+            return;
+        }
+        QStyledItemDelegate::setEditorData(editor, index);
+    }
+
+    void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const override
+    {
+        if (auto *combo = qobject_cast<QComboBox *>(editor))
+        {
+            if (combo->currentIndex() >= 0)
+                model->setData(index, combo->currentData());
+            return;
+        }
+        QStyledItemDelegate::setModelData(editor, model, index);
+    }
+
+private:
+    // A required tech. nullptr for every other field, including tech IDs on a
+    // browser that isn't the tech list (those stay a spin box).
+    QComboBox *techCombo(QWidget *parent, const QModelIndex &index) const
+    {
+        if (index.data(FieldTreeModel::RefKindRole).toInt() != static_cast<int>(RefKind::Tech))
+            return nullptr;
+        auto *techs = qobject_cast<TechListModel *>(list_);
+        if (!techs || techs->rowCount() == 0)
+            return nullptr;
+
+        const int self = selfId_ ? selfId_() : -1;
+        // The list greys these out; the config filter is what takes them out.
+        const bool hideInactive = filter_ && filter_->hidesInactive();
+        auto *combo = new QComboBox(parent);
+        for (int id = 0; id < techs->rowCount(); ++id)
+        {
+            if (id == self)
+                continue;
+            if (hideInactive && !techs->index(id).data(EntityListModel::ActiveRole).toBool())
+                continue;
+            combo->addItem(choiceText(techs->name(id), id), id);
+        }
+        wireCombo(combo);
+        return combo;
+    }
+
+    // Research location: the only unit reference on the tech browser. nullptr
+    // for unit references elsewhere, which stay a spin box.
+    QComboBox *buildingCombo(QWidget *parent, const QModelIndex &index) const
+    {
+        if (index.data(FieldTreeModel::RefKindRole).toInt() != static_cast<int>(RefKind::Unit))
+            return nullptr;
+        if (!qobject_cast<TechListModel *>(list_) || !session_ || !session_->isOpen())
+            return nullptr;
+        const int civ = list_->civ();
+        const auto &civs = session_->dat()->Civs;
+        if (civ < 0 || civ >= static_cast<int>(civs.size()))
+            return nullptr;
+
+        const genie::Civ &selected = civs[civ];
+        const int units = static_cast<int>(selected.Units.size());
+        const int pointers = static_cast<int>(selected.UnitPointers.size());
+        const int count = units < pointers ? units : pointers;
+        auto *combo = new QComboBox(parent);
+        for (int id = 0; id < count; ++id)
+        {
+            if (selected.UnitPointers[id] == 0 || selected.Units[id].Type != genie::UT_Building)
+                continue;
+            QString label = unitName(*session_, civ, id);
+            if (label.isEmpty())
+                label = QStringLiteral("(unnamed)");
+            combo->addItem(choiceText(label, id), id);
+        }
+        wireCombo(combo);
+        return combo;
+    }
+
+    // addItem selects the first row. Leave nothing selected until setEditorData,
+    // so closing an editor whose value isn't in the list doesn't write that
+    // first entry. activated is user-only, so setCurrentIndex does not commit.
+    void wireCombo(QComboBox *combo) const
+    {
+        combo->setCurrentIndex(-1);
+        const int popupWidth = combo->view()->sizeHintForColumn(0);
+        if (popupWidth > 0)
+            combo->view()->setMinimumWidth(popupWidth);
+        QObject::connect(combo, qOverload<int>(&QComboBox::activated), combo, [this, combo](int) {
+            auto *delegate = const_cast<FieldValueDelegate *>(this);
+            emit delegate->commitData(combo);
+            emit delegate->closeEditor(combo);
+        });
+    }
+
+    Session *session_;
+    EntityListModel *list_;
+    ListFilterModel *filter_;
+    std::function<int()> selfId_;
 };
 
 } // namespace
@@ -97,7 +216,9 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
     listView_->setItemDelegate(new InactiveRowDelegate(listView_));
 
     fieldView_->setModel(fieldModel_);
-    fieldView_->setItemDelegateForColumn(FieldTreeModel::ValueColumn, new FieldValueDelegate(fieldView_));
+    fieldView_->setItemDelegateForColumn(
+        FieldTreeModel::ValueColumn,
+        new FieldValueDelegate(session_, listModel_, listFilter_, [this] { return selectedRow(); }, fieldView_));
     fieldView_->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     fieldView_->setSelectionBehavior(QAbstractItemView::SelectRows);
     fieldView_->setAlternatingRowColors(true);

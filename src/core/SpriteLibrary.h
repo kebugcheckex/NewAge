@@ -22,9 +22,11 @@ struct SpriteSource
     bool isEmpty() const { return looseFolder.isEmpty() && drsFolders.isEmpty(); }
 };
 
-// Walks up from `datPath` looking for AGE's interface-sprite layouts. Does not
-// open the files. A loose .dat that isn't inside an install comes back empty.
-SpriteSource locateSpriteSource(const QString &datPath, genie::GameVersion version);
+// Looks for AGE's interface-sprite layouts in `gameDir`, the install the data
+// set was found in, then walks up from `datPath`. A mod's .dat lives outside
+// the install, so only `gameDir` finds its sprites. Does not open the files. A
+// loose .dat that isn't inside an install comes back empty.
+SpriteSource locateSpriteSource(const QString &datPath, genie::GameVersion version, const QString &gameDir = {});
 
 // One decoded sprite frame, straight RGBA, or a null image when the frame
 // isn't available. Kept as bytes so this stays QtCore-only; the view wraps it
@@ -52,8 +54,9 @@ public:
 
     // Forgets anything already loaded and remembers where to look. Files are
     // opened on the first frame() call. `version` is the loaded game version:
-    // it picks the DRS header size and which archive names to try.
-    void setSource(const QString &datPath, genie::GameVersion version);
+    // it picks the DRS header size and which archive names to try. `gameDir`
+    // is the install, if known; see locateSpriteSource().
+    void setSource(const QString &datPath, genie::GameVersion version, const QString &gameDir = {});
     void clear();
 
     // Frame `frameId` of SLP `slpId`, or a null image. Negative ids are null.
@@ -76,6 +79,7 @@ private:
     struct Cache;
 
     QString datPath_;
+    QString gameDir_;
     genie::GameVersion version_ = genie::GV_None;
     mutable std::unique_ptr<Cache> cache_;
 };

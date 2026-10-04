@@ -47,9 +47,9 @@ AGE logic worth porting as-is:
 
   ```
   src/app/     main.cpp
-  src/core/    Session, VersionProfile, Config, GameInstall, NameProvider    (QtCore only, no widgets)
+  src/core/    Session, VersionProfile, Config, GameInstall, Mods, NameProvider    (QtCore only, no widgets)
   src/model/   FieldDesc, descriptor tables, Qt item models   (QtCore only)
-  src/ui/      MainWindow, EntityBrowser, OptionsDialog
+  src/ui/      MainWindow, EntityBrowser, OptionsDialog, ModsPanel, ModsDialog
   tests/       Qt Test: load/save round-trip, config, game data, models, browser smoke test
   ```
 
@@ -101,7 +101,7 @@ The unit browser's layout for techs, and the first step towards "a new entity ty
   - `EntityListModel` (`src/model/`): base for per-civ entity lists. It holds the civ, resets on `Session::closed`, and provides the "ID - name" label, tooltip, `SearchTextRole` and `ActiveRole` (empty unit slot / unavailable tech = inactive). Subclasses give `name()` (the M3 label rule), `isActive()`, `internalName()` and `showFields()`, which binds their descriptor table to a `FieldTreeModel`.
   - `ListFilterModel` (was `UnitFilterModel`): text filter plus hiding inactive rows.
   - `EntityBrowser` (`src/ui/`, was `UnitBrowser`): civ combo, filter, list, field tree for any `EntityListModel`. It takes the model, the `Config` getter that hides inactive rows, and the filter placeholder. A delegate greys inactive rows (the model layer is QtCore-only, so no colours in the model).
-- `techFields()` (`src/model/TechFields.cpp`) works on `TechRef {id, tech}` because `genie::Tech` has no ID. Groups: General (ID, internal name, language name / description as string IDs, Type `0 - Regular` / `2 - Age`, Civ, Effect, Icon, Full tech mode), Requirements (4 or 6 required techs, labelled as `Loom (22)` with unused `-1` slots hidden, + count), Costs (3 × resource / amount / paid), Research location (first location's building, time, button).
+- `techFields()` (`src/model/TechFields.cpp`) works on `TechRef {id, tech}` because `genie::Tech` has no ID. Groups: General (ID, internal name, language name / description as string IDs, Type `0 - Regular` / `2 - Age`, Civ, Effect, Icon, Full tech mode), Requirements (4 or 6 required techs, labelled as `Loom (22)` with unused `-1` slots hidden, + count), Costs (3 × resource / amount / paid), Research location (first location's building, time, button). The building edits as a combo of the current civ's buildings (unit Type 80, slot in use), labelled `Town Center (109)`.
 - `MainWindow` shows the browsers as **Units**, **Techs** and **Effects** tabs. Each has its own civ combo. The status bar adds the tech and effect counts. Double-clicking a tech's Effect field (not `-1`) switches to the Effects tab and selects that effect.
 - Civ, Effect, and research location show `name (ID)` via `RefKind::Civ`, `RefKind::Effect`, and `RefKind::Unit`. Civ and effect names are the internal names; the location is the selected civ's unit name (language string, else internal name). `-1` and unknown IDs stay the plain number.
 - Not shown yet: the Help and Tech tree string IDs (`LanguageDLLHelp` / `LanguageDLLTechTree` carry a 100000 / 150000 offset whose lookup rule needs checking), `Repeatable` (C15+), `Name2` (SWGB), and DE's extra research locations.
@@ -109,18 +109,30 @@ The unit browser's layout for techs, and the first step towards "a new entity ty
 
 ### M4c: Editing a few number fields, and saving (done)
 
-- **Editable fields.** Units: Hit points, Line of sight, Speed, Costs (3 × resource / amount / paid, Type >= 70) and Train time (first train location, Type >= 70). Techs: Costs (3 × resource / amount / paid) and Research time (first research location). Everything else, including every text and string-ID field, stays read-only.
+- **Editable fields.** Units: Hit points, Line of sight, Speed, Costs (3 × resource / amount / paid, Type >= 70) and Train time (first train location, Type >= 70). Techs: Costs (3 × resource / amount / paid), Research time and Research location (first research location; the building ID). Everything else, including every text and string-ID field, stays read-only.
 - `FieldDesc<T>` gained `set` and an int range (`minimum` / `maximum`). `numberField()` builds an editable descriptor from one accessor lambda (`[](auto &u) -> auto & { return u.HitPoints; }`). Integer members accept their C++ type's range, so a value can't wrap on save. Float members edit as text in their shortest form.
 - `FieldTreeModel` holds no pointer into the `DatFile`. Rows remember their descriptor index, and `setData` goes through a `Writer` callback supplied by the entity list model's `showFields`. Writers look the entity up again on each edit. Unit writers reject a changed civ or inactive slot; tech writers require an existing tech but are independent of civ and research availability. `EntityListModel::entityEdited` sets `Session::setModified` and refreshes the list row.
 - **Units are per civ.** An edit changes only the selected civ's copy of the unit, as in AGE without its auto-copy option. Techs are global.
-- `EntityBrowser` edits the value column on double-click or F2, and the name cell forwards both. A delegate limits int spin boxes to the field's range.
+- `EntityBrowser` edits the value column on double-click or F2, and the name cell forwards both. A delegate limits int spin boxes to the field's range. A required tech edits as a combo of the other techs, and a research location as a combo of the current civ's buildings.
 - **Saving.** File > Save (Ctrl+S, enabled when modified) and Save As. `Session::saveAs` writes to a temporary file in the target folder, then replaces the target with `std::filesystem::rename`. A failed write leaves the old file untouched. Two Windows details:
   - genieutils keeps the input file open after `load()`, so `loadDat` calls `freelock()`.
   - `QTemporaryFile::close()` doesn't release the handle, so the temp file only reserves the name and is destroyed before genieutils writes to it.
 
   Closing or opening another file with unsaved changes asks Save / Discard / Cancel.
 
-- Not done: undo/redo (`QUndoStack`, M5), multi-select edits, ID-reference pickers, and the save-time version upgrade (section 1).
+- Not done: undo/redo (`QUndoStack`, M5), multi-select edits, ID-reference pickers other than required techs and research location, and the save-time version upgrade (section 1).
+
+### M4d: Icon preview (partial on DE)
+
+- Selecting a unit's or tech's Icon field pops up the icon next to the value (`EntityBrowser::showIcon`). `SpriteLibrary` (`src/core/SpriteLibrary.*`) loads interface SLPs and palette 50500 and caches decoded frames. The SLP follows AGE's tables: `techIconSlpId` (50729 for AoE/AoE2), `unitIconSlpId` (50730 for units, 50704 + the civ's IconSet for buildings, with packed/unpacked siege back on the unit SLP), and `unitIconFrame` (buildings add GraphicsAngle).
+- **Where the sprites are** (`locateSpriteSource`): the data set's `gameDir` first, then up to 8 folders up from the `.dat`. HD/DE use the loose `resources/_common/drs/{gamedata_x2,gamedata_x1,interface,graphics,terrain}` folders (plus `resources/_common/slp`). AoE DE uses `Data/DRS`. The classic games use `data/` (RoR: `data2/` first). A DE mod's `.dat` is in the user profile (M6), outside the install, so walking up from it alone never finds the game's sprites. `Session::open(GameDataset)` passes `gameDir` for that reason; a file from *Open Data File* only gets the walk.
+- **DE gap.** DE still ships the AoK 36×36 SLPs, but they only cover the original icons: 50729 has 118 frames, 50730 has 134, and only the building SLPs 50705–50708 exist. Measured on the current DE `.dat`, 101 of 536 tech icons and 597 of 802 unit icons (civ 1) are past the end of those SLPs. Civ IconSets go up to 13, so most building icons point at an SLP that doesn't exist. The SLP icons that do load are the old low-res art.
+- **DE fix (to do): read the DDS icons.** DE's real icons are in `<install>/widgetui/textures/ingame/`:
+  - `units/NNN_50730.dds`: 794 files, NNN = IconID, zero-padded to 3 digits. The extension is `.DDS` or `.dds`, so match case-insensitively.
+  - `tech/NNN_<name>.dds`: 308 files, e.g. `000_crop_rotation.DDS`. NNN is assumed to be the IconID; check that against a few techs.
+  - `buildings/NNN_<name>[_<n>].dds`: 109 files, e.g. `000_archery_range_1.DDS`, `007_castle.DDS`. These don't map directly to IconID + IconSet + GraphicsAngle. Work out the mapping (from AGE or the game's UI data) before using them; until then buildings keep the SLP path.
+  - Formats (DDS FourCC at offset 84): 849 uncompressed 32-bit BGRA, 353 DXT5 (BC3), 9 DXT1 (BC1). Sampled files are 256×256. Decode in `SpriteLibrary` so core stays QtCore-only: parse the 128-byte header, read the top mip level, and add a small BC1/BC3 block decoder. Qt's `qdds` plugin (qtimageformats) would be the alternative, but it lives on the UI side and adds a vcpkg dependency.
+  - Plan: for DE versions (GV_C2 to GV_C32) with a `widgetui` folder, look up the DDS by IconID first and fall back to the SLP frame. Scale the popup down (256×256 is large next to the field tree). Cache by (kind, IconID) next to the SLP frame cache.
 
 ### M2: Session and settings
 
@@ -142,7 +154,7 @@ AGE makes the user pick the `.dat` and each language file separately (see sectio
 - **Fallbacks.**
   - *File > Open Data File* opens loose or modded `.dat` files with a version picker and no language files. Labels fall back to internal names (see M3).
   - A folder that matches no layout gives an error listing what was looked for, not a guess.
-- **Mods** (DE mods live under `%USERPROFILE%\Games\Age of Empires 2 DE\<id>\mods`, HD under `<install>\mods`) are out of scope for now. A mod's `.dat` can be opened through *Open Data File*.
+- **Mods**: see M6. Detection itself ignores mod folders; a game folder always opens the game's own data.
 
 Known layouts. AoK HD and AoE2 DE were checked against real installs. The others come from AGE's default buttons (`OpenSaveDialog.cpp:168-330`) and must be checked before being trusted (case-insensitive: older games mix `data` / `Data`).
 
@@ -222,7 +234,7 @@ Each entity type has a descriptor table in `src/model/`; `FieldDesc<T>` in `Fiel
 - Implemented validation: `ModelTest::editableFieldsRoundTrip` checks get/set round-trips for the supported editable descriptors.
 - Planned: multi-select editing, showing a blank value where selected items differ and writing a new value to all selected items.
 - `FieldDesc::ref` (`RefKind`) marks int fields that hold another entity's ID. `FieldTreeModel::setObject` takes a `RefNamer` from the list model and shows such values as `name (ID)`. Kinds: `Tech` (required techs), `Resource` (costs), `Civ` and `Effect` (tech general fields), `Unit` (train location, research location and effect commands), `UnitClass` (unit Class and effect commands) and `Attribute` (effect commands). Class and attribute names are AGE's lists; the game files don't store them. `-1` is not an entity and stays the plain number, except unused effect-command slots, which are left out.
-- Planned: ID pickers. `FieldType` and `minVersion` are not current descriptor members; add metadata only as the new fields require it.
+- Planned: ID pickers for the remaining reference fields. Required techs and research location already edit as combos. `FieldType` and `minVersion` are not current descriptor members; add metadata only as the new fields require it.
 - Planned: more type-specific unit fields (`Bird`, `Type50`, `Creatable`, `Building`, etc.) with appropriate applicability and version checks.
 - Language IDs are currently read-only. genieutils widens the 16-bit union members into the 32-bit ones on load, so current reads are version-independent. Future setters must respect each format's stored width; older 16-bit fields must stay in `int16_t` range.
 
@@ -234,6 +246,27 @@ Each entity type has a descriptor table in `src/model/`; `FieldDesc<T>` in `Fiel
 - Planned: shared Add / Insert / Delete / Copy / Paste operations on entity lists.
 
 Techs and effects already reuse the shared browser. Effects are global (`DatFile::Effects`; the ID is the index), listed like techs, with one field group per command. Unused command slots (`-1`, usually Unit or Class) are left out; Amount, Mode and Modify Tech's Action keep `-1`. Class and attribute IDs show `name (ID)`. The goal for further entity types (graphics, sounds, civs...) is to add a descriptor table and list model while reusing the UI.
+
+### M6: Mods (panel done)
+
+Editing the game's own `.dat` changes the unmodded game, and only verifying the game files undoes it. HD and DE read data mods that mirror the game's `resources/` layout, so NewAge saves edits into a mod folder instead, e.g. `Age2HD\mods\My Balance Mod\resources\_common\dat\empires2_x2_p1.dat`.
+
+- **Where mods live** (`newage::modsFolders`, `src/core/Mods.*`): HD reads `<install>\mods`. DE keeps mods in the user profile, not the game folder: `%USERPROFILE%\Games\Age of Empires 2 DE\<profile ID>\mods\local` (not `Documents\My Games`, which AoE3 DE and AoE IV use). There is one candidate per profile folder that has a `mods` folder: one per account (the Steam ID), plus `0` from before signing in. Profiles with a `mods\mod-status.json` come first, then the most recently changed. Only data sets with their `.dat` in `resources/_common/dat` (`aokhd`, HD's `tc`, `aoe2de`) support mods (`supportsMods`). The CD-era games, including a CD TC install, have none.
+- **A mod** is a folder holding `info.json` and optionally `resources/_common/dat/<the data set's .dat name>`. `info.json` has exactly the keys DE writes for local mods, checked against a real profile: `{"Author":"…","CacheStatus":0,"Description":"…","Title":"…"}`. The folder name may differ from the title (DE's own `SuperMonk` is titled "Super Monk"); NewAge names new folders after the title. `checkModTitle` rejects names that can't be a Windows folder or clash (case-insensitively) with an existing entry. `findMods` lists the folders; a folder without `info.json` shows its folder name. `writeModInfo` rewrites `Title`, `Author` and `Description` and keeps any other keys (downloaded mods have more); the folder keeps its name.
+- **Opening a mod** (`modDataset`) uses the game's data set with the mod's `.dat`, and the mod's key-value strings ahead of the game's.
+- **Mods panel** (`ModsPanel`, a dock on the left, *View > Mods*). It is shown while a game folder that supports mods is open. It was chosen over a fourth tab because it picks *which* data the Units/Techs/Effects tabs show, and over a dialog so the mod being edited stays in view. From top to bottom it has:
+  - a mods-folder combo (candidates plus Browse, remembered per game folder under `mods/folders`);
+  - the list: *Game data (unmodded)*, then the mods by title, with mods without their own `.dat` dimmed and the one being edited bold with a ✎;
+  - the selected row's details;
+  - *Edit*, *New Mod...* and a ⋯ menu (*Save Current Data Here*, *Edit Info...*, *Show in Folder*), also on the right-click menu.
+  A single click only selects; double-click, Enter or *Edit* loads, after the usual offer to save changes. Whether the panel is shown is remembered (`mods/panelVisible`). The panel loads and saves nothing itself: it creates mods and edits `info.json`, and signals `MainWindow` for the rest.
+- **The mod being edited** (`MainWindow::modDir_`) is where *Save* writes, `<mod>/resources/_common/dat/<name>.dat`, whether or not that file exists yet. Editing a mod without its own `.dat` loads the game's `.dat` (with the mod's strings) and Save creates the mod's copy; Save is enabled while that copy is missing, even with no changes. The window title shows the mod's name. *Save As...* to another file stops editing the mod.
+- **New Mod...** (`ModInfoDialog`: name, author, description, and *Start from*) creates the folder, then edits it starting from the game data (default), the open data (kept as is, changes included), or another mod's `.dat`. Nothing is copied until the first save.
+- **Opening a game folder** goes back to the mod last edited for that `.dat` (`mods/edited`), or the game data if there was none, the mod is gone, or it fails to load.
+- **Save guard.** *File > Save* on a file under `<game>/resources` asks first, offering *Save As Mod...* (default), *Overwrite* or *Cancel*. *File > Save As Mod...* (`SaveAsModDialog`) picks a mod in the panel's folder, or makes one, to save into, and switches to editing it. Saving into a mod that already has a `.dat` other than the one being edited asks before replacing it.
+- MainWindow keeps the game's data set (`gameDataset_`) as the base for its mods, so opening one mod after another doesn't stack their strings. *Open Data File* clears it and hides the panel.
+- **Enabling.** DE tracks mods in `mods\mod-status.json` (path, title, checksum, `Enabled`, priority). That file belongs to the game: NewAge doesn't write it, and the player enables a new mod in the game's mod manager. Not yet checked: that DE picks up a new local folder on its own, and HD's mod format as a whole.
+- **Later:** delete or rename mods (folder), DE's subscribed (downloaded) mods as read-only entries with *Copy to Local Mod*, a thumbnail, mods of mods (a mod's strings and other resources), copying the game's `.dat` into a new mod without opening it, and locating DE's profile folder without a guess.
 
 ## 4. Deliberately out of scope (unless needed later)
 
@@ -247,7 +280,7 @@ Techs and effects already reuse the shared browser. Effects are global (`DatFile
 
 ## 5. Later, if needed
 
-- **Sprite preview:** DRS / SLP / SMX frames decoded by genieutils, drawn into a `QImage` with a palette. Port `Loaders.cpp` (palettes, LRU cache).
+- **Sprite preview** beyond icons (M4d): unit graphics from DRS / SLP / SMX frames decoded by genieutils, drawn into a `QImage` with a palette. Port the rest of `Loaders.cpp` (LRU cache).
 - **Language string editing:** requires writing language files back (`LangFile::saveAs`).
 - **Packaging:** `windeployqt` + an install target.
 

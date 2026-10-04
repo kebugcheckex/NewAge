@@ -22,6 +22,8 @@ to a new one. Saving first writes a temporary file next to the target and
 then replaces the target, so a failed save leaves the old file intact. There
 is no undo yet.
 
+For HD and DE, edit mods instead of the game's own files. Opening a game folder shows the Mods panel (View > Mods). It lists the game data and the mods in the game's mods folder: `<install>\mods` for HD, and `%USERPROFILE%\Games\Age of Empires 2 DE\<profile ID>\mods\local` for DE, which keeps mods in the user profile rather than the game folder. Double-click a mod, or select it and press Edit, to load it; Save then writes to `<mod>\resources\_common\dat\<same file name>` and leaves the original alone. New Mod... creates a mod folder with an `info.json` holding name, author and description, starting from the game data, the open data or another mod. File > Save As Mod... saves the open data into a mod, and File > Save on the game's own data file asks whether to do that first. NewAge reopens the mod you last edited. A new mod starts out disabled; turn it on in the game's mod manager.
+
 ## Layout
 
 ```

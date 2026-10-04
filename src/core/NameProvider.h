@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -28,10 +29,15 @@ public:
     ~NameProvider();
     NameProvider(const NameProvider &) = delete;
     NameProvider &operator=(const NameProvider &) = delete;
+    NameProvider(NameProvider &&) noexcept;
+    NameProvider &operator=(NameProvider &&) noexcept;
 
     // Replaces any loaded strings. Files that can't be read are skipped; each
     // one adds a message to `errors` (if given). Returns false if any failed.
-    bool load(const QStringList &files, QStringList *errors = nullptr);
+    // `progress`, if set, is called on this thread before each file, with that
+    // file's index and the file count.
+    bool load(const QStringList &files, QStringList *errors = nullptr,
+              const std::function<void(int index, int count)> &progress = {});
     void clear();
 
     // Files that loaded, highest priority first.

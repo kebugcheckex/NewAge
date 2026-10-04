@@ -104,7 +104,12 @@ NameProvider::NameProvider() = default;
 
 NameProvider::~NameProvider() = default;
 
-bool NameProvider::load(const QStringList &files, QStringList *errors)
+NameProvider::NameProvider(NameProvider &&) noexcept = default;
+
+NameProvider &NameProvider::operator=(NameProvider &&) noexcept = default;
+
+bool NameProvider::load(const QStringList &files, QStringList *errors,
+                        const std::function<void(int index, int count)> &progress)
 {
     clear();
     bool allLoaded = true;
@@ -114,8 +119,13 @@ bool NameProvider::load(const QStringList &files, QStringList *errors)
             errors->append(QStringLiteral("%1: %2").arg(QDir::toNativeSeparators(path), why));
     };
 
+    const int count = static_cast<int>(files.size());
+    int index = 0;
     for (const QString &path : files)
     {
+        if (progress)
+            progress(index, count);
+        ++index;
         Source source;
         if (QFileInfo(path).suffix().compare(QStringLiteral("dll"), Qt::CaseInsensitive) == 0)
         {

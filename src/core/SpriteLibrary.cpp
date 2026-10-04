@@ -426,8 +426,15 @@ struct SpriteLibrary::Cache
     }
 };
 
-SpriteSource locateSpriteSource(const QString &datPath, genie::GameVersion version)
+SpriteSource locateSpriteSource(const QString &datPath, genie::GameVersion version, const QString &gameDir)
 {
+    if (!gameDir.isEmpty())
+    {
+        const SpriteSource source = probe(QDir(gameDir).absolutePath(), version);
+        if (!source.isEmpty())
+            return source;
+    }
+
     QString dir = QFileInfo(datPath).absolutePath();
     for (int depth = 0; depth < 8 && !dir.isEmpty(); ++depth)
     {
@@ -443,16 +450,18 @@ SpriteLibrary::SpriteLibrary() = default;
 
 SpriteLibrary::~SpriteLibrary() = default;
 
-void SpriteLibrary::setSource(const QString &datPath, genie::GameVersion version)
+void SpriteLibrary::setSource(const QString &datPath, genie::GameVersion version, const QString &gameDir)
 {
     clear();
     datPath_ = datPath;
+    gameDir_ = gameDir;
     version_ = version;
 }
 
 void SpriteLibrary::clear()
 {
     datPath_.clear();
+    gameDir_.clear();
     version_ = genie::GV_None;
     cache_.reset();
 }
@@ -466,7 +475,7 @@ SpriteImage SpriteLibrary::frame(int slpId, int frameId) const
     if (!cache_->located)
     {
         cache_->located = true;
-        cache_->source = locateSpriteSource(datPath_, version_);
+        cache_->source = locateSpriteSource(datPath_, version_, gameDir_);
     }
     if (cache_->source.isEmpty())
         return {};
