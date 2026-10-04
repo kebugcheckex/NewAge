@@ -35,6 +35,9 @@ public:
         // int(SpriteKind). Set on both columns of a sprite field, so a hover
         // on the name or the value can preview it. None for everything else.
         SpriteRole,
+        // int(RefKind). Set on both columns, so a double-click on the name or
+        // the value can follow the reference. None for everything else.
+        RefKindRole,
     };
 
     // One field with its value already read from the object.

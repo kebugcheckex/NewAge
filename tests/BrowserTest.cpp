@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QLineEdit>
 #include <QListView>
+#include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTest>
@@ -14,6 +15,7 @@
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "model/EffectListModel.h"
 #include "model/FieldTreeModel.h"
 #include "model/TechListModel.h"
 #include "model/UnitListModel.h"
@@ -98,6 +100,12 @@ std::unique_ptr<EntityBrowser> techBrowser(Session *session, Config *config)
                              QStringLiteral("Filter techs"));
 }
 
+std::unique_ptr<EntityBrowser> effectBrowser(Session *session, Config *config)
+{
+    return std::make_unique<EntityBrowser>(session, config, new EffectListModel(session), nullptr,
+                                           QStringLiteral("Filter effects"));
+}
+
 } // namespace
 
 class BrowserTest : public QObject
@@ -108,6 +116,7 @@ private slots:
     void browseSampleUnits();
     void hideEmptyUnits();
     void browseSampleTechs();
+    void doubleClickEffectSelectsIt();
     void editFields();
     void optionsDialogEditsConfig();
 
@@ -243,6 +252,76 @@ void BrowserTest::browseSampleTechs()
     session.close();
     QCOMPARE(techs->model()->rowCount(), 0);
     QCOMPARE(fields->model()->rowCount(), 0);
+}
+
+void BrowserTest::doubleClickEffectSelectsIt()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+
+    Session session;
+    Config config(dir_.filePath(QStringLiteral("effects.json")));
+    const auto techs = techBrowser(&session, &config);
+    const auto effects = effectBrowser(&session, &config);
+    QSignalSpy activated(techs.get(), &EntityBrowser::effectActivated);
+    connect(techs.get(), &EntityBrowser::effectActivated, effects.get(), &EntityBrowser::selectEntity);
+
+    auto *techList = techs->findChild<QListView *>();
+    auto *techFields = techs->findChild<QTreeView *>();
+    auto *effectList = effects->findChild<QListView *>();
+    auto *effectFields = effects->findChild<QTreeView *>();
+    auto *effectFilter = effects->findChild<QLineEdit *>();
+    QVERIFY(techList && techFields && effectList && effectFields && effectFilter);
+
+    QString error;
+    QVERIFY2(session.open(kTcDat, *findVersionProfile(QStringLiteral("tc")), &error), qPrintable(error));
+    QCOMPARE(effectList->model()->rowCount(), static_cast<int>(session.dat()->Effects.size()));
+    QCOMPARE(effectFilter->placeholderText(), QStringLiteral("Filter effects"));
+
+    effectFilter->setText(QStringLiteral("zzzz-no-such-effect"));
+    QCOMPARE(effectList->model()->rowCount(), 0);
+    effects->selectEntity(22);
+    QVERIFY(effectFilter->text().isEmpty());
+    QVERIFY(effectList->currentIndex().data().toString().startsWith(QStringLiteral("22 - ")));
+    const QString effectName = QString::fromLatin1(session.dat()->Effects.at(22).Name);
+    QCOMPARE(shownValue(effectFields, QStringLiteral("Internal name")), effectName);
+    effects->selectEntity(-1);
+    QVERIFY(effectList->currentIndex().data().toString().startsWith(QStringLiteral("22 - ")));
+
+    selectId(techList, 22);
+    const QModelIndex effect = valueIndex(techFields, QStringLiteral("Effect"));
+    QVERIFY(effect.isValid());
+    const int effectId = effect.data(FieldTreeModel::ValueRole).toInt();
+    QVERIFY(effectId >= 0);
+    // The view emits doubleClicked for the cell that was clicked. Both columns
+    // name the same effect.
+    QVERIFY(QMetaObject::invokeMethod(techFields, "doubleClicked", Q_ARG(QModelIndex, effect)));
+    QCOMPARE(activated.size(), 1);
+    QCOMPARE(activated.at(0).at(0).toInt(), effectId);
+    QVERIFY(effectList->currentIndex().data().toString().startsWith(QStringLiteral("%1 - ").arg(effectId)));
+    QVERIFY(QMetaObject::invokeMethod(techFields, "doubleClicked",
+                                      Q_ARG(QModelIndex, effect.siblingAtColumn(FieldTreeModel::NameColumn))));
+    QCOMPARE(activated.size(), 2);
+
+    int none = -1;
+    const auto &techData = session.dat()->Techs;
+    for (int i = 0; i < static_cast<int>(techData.size()); ++i)
+    {
+        if (techData[i].EffectID < 0)
+        {
+            none = i;
+            break;
+        }
+    }
+    if (none >= 0)
+    {
+        selectId(techList, none);
+        const QModelIndex missing = valueIndex(techFields, QStringLiteral("Effect"));
+        QVERIFY(missing.isValid());
+        QCOMPARE(missing.data(FieldTreeModel::ValueRole).toInt(), -1);
+        QVERIFY(QMetaObject::invokeMethod(techFields, "doubleClicked", Q_ARG(QModelIndex, missing)));
+        QCOMPARE(activated.size(), 2);
+    }
 }
 
 void BrowserTest::editFields()

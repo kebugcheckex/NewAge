@@ -36,11 +36,20 @@ public:
     using HideInactiveEntry = bool (Config::*)() const;
 
     // Takes ownership of `model`. `hideInactive` is re-read whenever `config`
-    // changes. `filterHint` is the filter box placeholder ("Filter units").
+    // changes; null means inactive rows are never hidden. `filterHint` is the
+    // filter box placeholder ("Filter units").
     EntityBrowser(Session *session, Config *config, EntityListModel *model, HideInactiveEntry hideInactive,
                   const QString &filterHint, QWidget *parent = nullptr);
 
     EntityListModel *model() const { return listModel_; }
+
+    // Clears the text filter and selects entity `id`, scrolling it into view.
+    // No-op when `id` is out of range or the row isn't selectable.
+    void selectEntity(int id);
+
+signals:
+    // An Effect reference was double-clicked, and `id` names an effect (not -1).
+    void effectActivated(int id);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;

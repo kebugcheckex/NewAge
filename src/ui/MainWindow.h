@@ -9,6 +9,7 @@ class QTabWidget;
 namespace newage {
 
 class Config;
+class EntityBrowser;
 class Session;
 
 class MainWindow : public QMainWindow
@@ -39,8 +40,10 @@ private:
     Session *session_;
     QStackedWidget *pages_;
     QLabel *placeholder_;
-    // Units and Techs tabs, shown while data is open.
+    // Units, Techs and Effects tabs, shown while data is open.
     QTabWidget *browsers_;
+    EntityBrowser *techBrowser_ = nullptr;
+    EntityBrowser *effectsBrowser_ = nullptr;
     QLabel *fileInfo_;
     QAction *saveAction_ = nullptr;
     QAction *saveAsAction_ = nullptr;

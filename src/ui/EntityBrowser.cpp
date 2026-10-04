@@ -139,15 +139,26 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
     connect(config_, &Config::changed, this, &EntityBrowser::applyConfig);
     // Rows are selected whole, so the name cell edits the value too: F2 edits
     // the current cell, kept on the value column, and a double-click on the
-    // name is passed on to the value.
+    // name is passed on to the value. An Effect reference jumps to that effect
+    // instead of editing.
     connect(fieldView_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex &current) {
         if (current.column() == FieldTreeModel::NameColumn && current.parent().isValid())
             fieldView_->selectionModel()->setCurrentIndex(current.siblingAtColumn(FieldTreeModel::ValueColumn),
                                                           QItemSelectionModel::NoUpdate);
     });
     connect(fieldView_, &QTreeView::doubleClicked, this, [this](const QModelIndex &index) {
+        if (!index.parent().isValid())
+            return;
+        const QModelIndex value = index.siblingAtColumn(FieldTreeModel::ValueColumn);
+        if (value.data(FieldTreeModel::RefKindRole).toInt() == static_cast<int>(RefKind::Effect))
+        {
+            const int id = value.data(FieldTreeModel::ValueRole).toInt();
+            if (id >= 0)
+                emit effectActivated(id);
+            return;
+        }
         if (index.column() == FieldTreeModel::NameColumn)
-            fieldView_->edit(index.siblingAtColumn(FieldTreeModel::ValueColumn));
+            fieldView_->edit(value);
     });
     connect(fieldModel_, &QAbstractItemModel::modelReset, this, [this] {
         hideTechIcon();
@@ -225,9 +236,18 @@ void EntityBrowser::selectRow(int row)
     listView_->scrollTo(index, QAbstractItemView::PositionAtCenter);
 }
 
+void EntityBrowser::selectEntity(int id)
+{
+    if (id < 0 || id >= listModel_->rowCount())
+        return;
+    filterEdit_->clear();
+    selectRow(id);
+}
+
 void EntityBrowser::applyConfig()
 {
-    listFilter_->setHideInactive((config_->*hideInactive_)());
+    if (hideInactive_)
+        listFilter_->setHideInactive((config_->*hideInactive_)());
     if (listView_->currentIndex().isValid())
         listView_->scrollTo(listView_->currentIndex());
 }

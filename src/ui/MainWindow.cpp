@@ -20,6 +20,7 @@
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "model/EffectListModel.h"
 #include "model/TechListModel.h"
 #include "model/UnitListModel.h"
 #include "ui/EntityBrowser.h"
@@ -55,9 +56,16 @@ MainWindow::MainWindow(Config *config, QWidget *parent)
     browsers_->addTab(new EntityBrowser(session_, config_, new UnitListModel(session_), &Config::hideEmptyUnits,
                                         tr("Filter units")),
                       tr("&Units"));
-    browsers_->addTab(new EntityBrowser(session_, config_, new TechListModel(session_),
-                                        &Config::hideUnavailableTechs, tr("Filter techs")),
-                      tr("T&echs"));
+    techBrowser_ = new EntityBrowser(session_, config_, new TechListModel(session_), &Config::hideUnavailableTechs,
+                                     tr("Filter techs"), this);
+    effectsBrowser_ = new EntityBrowser(session_, config_, new EffectListModel(session_), nullptr,
+                                        tr("Filter effects"), this);
+    browsers_->addTab(techBrowser_, tr("T&echs"));
+    browsers_->addTab(effectsBrowser_, tr("Effects"));
+    connect(techBrowser_, &EntityBrowser::effectActivated, this, [this](int id) {
+        browsers_->setCurrentWidget(effectsBrowser_);
+        effectsBrowser_->selectEntity(id);
+    });
     pages_->addWidget(browsers_);
     setCentralWidget(pages_);
     statusBar()->addPermanentWidget(fileInfo_);
@@ -295,11 +303,12 @@ void MainWindow::refresh()
 
     const genie::DatFile &dat = *session_->dat();
     const int languageFiles = static_cast<int>(session_->names().files().size());
-    fileInfo_->setText(tr("%1 | %2 civs | %3 units | %4 techs | %5")
+    fileInfo_->setText(tr("%1 | %2 civs | %3 units | %4 techs | %5 effects | %6")
                            .arg(QString::fromLatin1(dat.FileVersion.c_str()))
                            .arg(dat.Civs.size())
                            .arg(dat.Civs.front().Units.size())
                            .arg(dat.Techs.size())
+                           .arg(dat.Effects.size())
                            .arg(languageFiles ? tr("%n language file(s)", nullptr, languageFiles)
                                               : tr("no language files")));
 }

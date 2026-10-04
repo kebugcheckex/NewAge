@@ -80,6 +80,8 @@ QVariant FieldTreeModel::data(const QModelIndex &index, int role) const
     const Row &row = *rowAt(index);
     if (role == SpriteRole)
         return static_cast<int>(row.sprite);
+    if (role == RefKindRole)
+        return static_cast<int>(row.ref);
     if (role == Qt::DisplayRole)
     {
         if (index.column() == NameColumn)
@@ -105,6 +107,8 @@ QVariant FieldTreeModel::data(const QModelIndex &index, int role) const
             return row.note;
         if (isEditable(row))
             return tr("Double-click to edit");
+        if (row.ref == RefKind::Effect && row.value.toInt() >= 0)
+            return tr("Double-click to show");
         return {};
     case ValueRole:
         return row.value;

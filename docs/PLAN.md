@@ -102,7 +102,7 @@ The unit browser's layout for techs, and the first step towards "a new entity ty
   - `ListFilterModel` (was `UnitFilterModel`): text filter plus hiding inactive rows.
   - `EntityBrowser` (`src/ui/`, was `UnitBrowser`): civ combo, filter, list, field tree for any `EntityListModel`. It takes the model, the `Config` getter that hides inactive rows, and the filter placeholder. A delegate greys inactive rows (the model layer is QtCore-only, so no colours in the model).
 - `techFields()` (`src/model/TechFields.cpp`) works on `TechRef {id, tech}` because `genie::Tech` has no ID. Groups: General (ID, internal name, language name / description as string IDs, Type `0 - Regular` / `2 - Age`, Civ, Effect, Icon, Full tech mode), Requirements (4 or 6 required techs, labelled as `Loom (22)` with unused `-1` slots hidden, + count), Costs (3 × resource / amount / paid), Research location (first location's building, time, button).
-- `MainWindow` shows the browsers as **Units** and **Techs** tabs. Each has its own civ combo. The status bar adds the tech count.
+- `MainWindow` shows the browsers as **Units**, **Techs** and **Effects** tabs. Each has its own civ combo. The status bar adds the tech and effect counts. Double-clicking a tech's Effect field (not `-1`) switches to the Effects tab and selects that effect.
 - Civ, Effect, and research location show `name (ID)` via `RefKind::Civ`, `RefKind::Effect`, and `RefKind::Unit`. Civ and effect names are the internal names; the location is the selected civ's unit name (language string, else internal name). `-1` and unknown IDs stay the plain number.
 - Not shown yet: the Help and Tech tree string IDs (`LanguageDLLHelp` / `LanguageDLLTechTree` carry a 100000 / 150000 offset whose lookup rule needs checking), `Repeatable` (C15+), `Name2` (SWGB), and DE's extra research locations.
 - Follow-up: tech tree effects also disable units (command type 2). The unit list could mark those the same way.
@@ -233,7 +233,7 @@ Each entity type has a descriptor table in `src/model/`; `FieldDesc<T>` in `Fiel
 - Planned: route edits through `QUndoStack` / `QUndoCommand` for undo/redo and modified-state tracking.
 - Planned: shared Add / Insert / Delete / Copy / Paste operations on entity lists.
 
-Techs already reuse the shared browser. The goal for further entity types (effects, graphics, sounds, civs...) is to add a descriptor table and list model while reusing the UI.
+Techs and effects already reuse the shared browser. Effects are global (`DatFile::Effects`; the ID is the index), listed like techs, with one field group per command. The goal for further entity types (graphics, sounds, civs...) is to add a descriptor table and list model while reusing the UI.
 
 ## 4. Deliberately out of scope (unless needed later)
 

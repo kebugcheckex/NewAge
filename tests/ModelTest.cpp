@@ -11,6 +11,8 @@
 #include "core/Session.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "model/EffectFields.h"
+#include "model/EffectListModel.h"
 #include "model/FieldTreeModel.h"
 #include "model/ListFilterModel.h"
 #include "model/ResourceNames.h"
@@ -36,6 +38,23 @@ QModelIndex fieldIndex(const FieldTreeModel &model, const QString &name)
         {
             if (model.index(r, FieldTreeModel::NameColumn, group).data().toString() == name)
                 return model.index(r, FieldTreeModel::ValueColumn, group);
+        }
+    }
+    return {};
+}
+
+// Value column of field `name` under group heading `group`.
+QModelIndex fieldInGroup(const FieldTreeModel &model, const QString &group, const QString &name)
+{
+    for (int g = 0; g < model.rowCount(); ++g)
+    {
+        const QModelIndex heading = model.index(g, 0);
+        if (heading.data().toString() != group)
+            continue;
+        for (int r = 0; r < model.rowCount(heading); ++r)
+        {
+            if (model.index(r, FieldTreeModel::NameColumn, heading).data().toString() == name)
+                return model.index(r, FieldTreeModel::ValueColumn, heading);
         }
     }
     return {};
@@ -118,6 +137,8 @@ private slots:
     void resourceNamesPerVersion();
     void fieldTreeEditing();
     void techIconMarkedForPreview();
+    void effectFieldsListCommands();
+    void sampleEffectValues();
     void referenceLabelFollowsEdits();
     void editAndSaveSample();
 
@@ -327,6 +348,11 @@ void ModelTest::techCivAndEffectShowNames()
     QCOMPARE(fieldText(model, QStringLiteral("Civ")), QStringLiteral("Briton (1)"));
     QCOMPARE(fieldValue(model, QStringLiteral("Effect")).toInt(), 22);
     QCOMPARE(fieldText(model, QStringLiteral("Effect")), QStringLiteral("Loom (22)"));
+    const QModelIndex effect = fieldIndex(model, QStringLiteral("Effect"));
+    QCOMPARE(effect.data(FieldTreeModel::RefKindRole).toInt(), static_cast<int>(RefKind::Effect));
+    QCOMPARE(effect.siblingAtColumn(FieldTreeModel::NameColumn).data(FieldTreeModel::RefKindRole).toInt(),
+             static_cast<int>(RefKind::Effect));
+    QCOMPARE(effect.data(Qt::ToolTipRole).toString(), QStringLiteral("Double-click to show"));
     QCOMPARE(fieldValue(model, QStringLiteral("Location")).toInt(), 109);
     QCOMPARE(fieldText(model, QStringLiteral("Location")), QStringLiteral("Town Center (109)"));
 
@@ -337,6 +363,7 @@ void ModelTest::techCivAndEffectShowNames()
     model.setObject(techFields(), TechRef{7, tech}, nullptr, {}, namer);
     QCOMPARE(fieldText(model, QStringLiteral("Civ")), QStringLiteral("-1"));
     QCOMPARE(fieldText(model, QStringLiteral("Effect")), QStringLiteral("-1"));
+    QCOMPARE(fieldIndex(model, QStringLiteral("Effect")).data(Qt::ToolTipRole).toString(), QString());
     QCOMPARE(fieldText(model, QStringLiteral("Location")), QStringLiteral("-1"));
 }
 
@@ -743,6 +770,143 @@ void ModelTest::editAndSaveSample()
     QVERIFY(!session.saveAs(dir.filePath(QStringLiteral("missing/edited.dat")), &error));
     QVERIFY(session.isModified());
     QCOMPARE(session.datPath(), dat);
+}
+
+void ModelTest::effectFieldsListCommands()
+{
+    QCOMPARE(effectTypeName(genie::GV_TC, 102), QStringLiteral("102 - Disable Tech"));
+    QCOMPARE(effectTypeName(genie::GV_TC, 2), QStringLiteral("2 - Enable/Disable Unit"));
+    QCOMPARE(effectTypeName(genie::GV_AoE, 6), QStringLiteral("6 - Unknown"));
+    QCOMPARE(effectTypeName(genie::GV_AoK, 6), QStringLiteral("6 - Resource Modifier (Multiply)"));
+    QCOMPARE(effectTypeName(genie::GV_Tapsa, 101), QStringLiteral("101 - Tech Cost Modifier (Set/+/-)"));
+    QCOMPARE(effectTypeName(genie::GV_TC, 10), QStringLiteral("10 - Unknown"));
+    QCOMPARE(effectTypeName(genie::GV_C2, 10), QStringLiteral("10 - Team Attribute Modifier (Set)"));
+    QCOMPARE(effectTypeName(genie::GV_SWGB, 10), QStringLiteral("10 - Unknown"));
+    QCOMPARE(effectTypeName(genie::GV_TC, 7), QStringLiteral("7 - Unknown"));
+    QCOMPARE(effectTypeName(genie::GV_C2, 7), QStringLiteral("7 - Spawn Unit"));
+    QCOMPARE(effectTypeName(genie::GV_TC, 99), QStringLiteral("99 - Unknown"));
+
+    genie::Effect effect;
+    effect.Name = "Loom";
+    genie::EffectCommand disable;
+    disable.Type = 102;
+    disable.A = 1;
+    disable.D = 22;
+    genie::EffectCommand unit;
+    unit.Type = 2;
+    unit.A = 4;
+    unit.B = 0;
+    unit.C = -1;
+    genie::EffectCommand unknown;
+    unknown.Type = 99;
+    unknown.A = 1;
+    unknown.B = 2;
+    unknown.C = 3;
+    unknown.D = 4.5f;
+    effect.EffectCommands = {disable, unit, unknown};
+
+    const FieldTreeModel::RefNamer namer = [](RefKind kind, int id) {
+        if (kind == RefKind::Tech && id == 22)
+            return QStringLiteral("Loom");
+        if (kind == RefKind::Unit && id == 4)
+            return QStringLiteral("Archer");
+        return QString();
+    };
+    FieldTreeModel model;
+    model.setObject(effectFields(effect, genie::GV_TC), EffectRef{7, effect}, nullptr, {}, namer);
+    QCOMPARE(fieldValue(model, QStringLiteral("ID")).toInt(), 7);
+    QCOMPARE(fieldValue(model, QStringLiteral("Internal name")).toString(), QStringLiteral("Loom"));
+    QCOMPARE(fieldValue(model, QStringLiteral("Command count")).toInt(), 3);
+
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Type")).data().toString(),
+             QStringLiteral("102 - Disable Tech"));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Tech")).data().toString(),
+             QStringLiteral("Loom (22)"));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Tech")).data(FieldTreeModel::RefKindRole).toInt(),
+             static_cast<int>(RefKind::Tech));
+    QVERIFY(!fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("A")).isValid());
+
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("Unit")).data().toString(),
+             QStringLiteral("Archer (4)"));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("Mode")).data().toString(),
+             QStringLiteral("0 - Disable"));
+    QVERIFY(!fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("C")).isValid());
+
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 3"), QStringLiteral("Type")).data().toString(),
+             QStringLiteral("99 - Unknown"));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 3"), QStringLiteral("A")).data().toInt(), 1);
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 3"), QStringLiteral("D")).data().toFloat(), 4.5f);
+
+    genie::Effect resource;
+    genie::EffectCommand cost;
+    cost.Type = 1;
+    cost.A = 3;
+    cost.B = 0;
+    cost.C = 1;
+    cost.D = 50;
+    resource.EffectCommands = {cost};
+    model.setObject(effectFields(resource, genie::GV_TC), EffectRef{1, resource});
+    QVERIFY(!fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Multiply resource")).isValid());
+    model.setObject(effectFields(resource, genie::GV_C2), EffectRef{1, resource});
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Multiply resource")).data().toInt(), 1);
+
+    effect.EffectCommands.clear();
+    effect.Name.clear();
+    model.setObject(effectFields(effect, genie::GV_TC), EffectRef{0, effect});
+    QCOMPARE(fieldValue(model, QStringLiteral("Command count")).toInt(), 0);
+    QCOMPARE(fieldValue(model, QStringLiteral("Internal name")).toString(), QString());
+    QCOMPARE(model.rowCount(), 1);
+}
+
+void ModelTest::sampleEffectValues()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+
+    Session session;
+    QVERIFY(openSample(session));
+
+    EffectListModel effects(&session);
+    QAbstractItemModelTester tester(&effects, QAbstractItemModelTester::FailureReportingMode::QtTest);
+    effects.setCiv(1);
+    const int count = static_cast<int>(session.dat()->Effects.size());
+    QCOMPARE(effects.rowCount(), count);
+    effects.setCiv(2);
+    QCOMPARE(effects.rowCount(), count);
+    effects.setCiv(1);
+
+    const QString internal = QString::fromLatin1(session.dat()->Effects.at(22).Name);
+    QVERIFY(!internal.isEmpty());
+    QCOMPARE(effects.index(22).data().toString(), QStringLiteral("%1 - %2").arg(22).arg(internal));
+    QCOMPARE(effects.index(22).data(Qt::ToolTipRole).toString(), internal);
+    QCOMPARE(effects.index(22).data(EffectListModel::ActiveRole).toBool(), true);
+
+    for (int row = 0; row < effects.rowCount(); ++row)
+    {
+        if (!session.dat()->Effects.at(row).Name.empty())
+            continue;
+        QCOMPARE(effects.index(row).data().toString(), QStringLiteral("%1 - (unnamed)").arg(row));
+        break;
+    }
+
+    FieldTreeModel fields;
+    effects.showFields(22, fields);
+    QCOMPARE(fieldValue(fields, QStringLiteral("ID")).toInt(), 22);
+    QCOMPARE(fieldValue(fields, QStringLiteral("Internal name")).toString(), internal);
+    QCOMPARE(fieldValue(fields, QStringLiteral("Command count")).toInt(),
+             static_cast<int>(session.dat()->Effects.at(22).EffectCommands.size()));
+    if (!session.dat()->Effects.at(22).EffectCommands.empty())
+    {
+        QCOMPARE(fieldText(fields, QStringLiteral("Type")),
+                 effectTypeName(session.gameVersion(), session.dat()->Effects.at(22).EffectCommands.front().Type));
+    }
+
+    effects.showFields(-1, fields);
+    QCOMPARE(fields.rowCount(), 0);
+
+    session.close();
+    QCOMPARE(effects.rowCount(), 0);
+    QVERIFY(!effects.effect(22));
 }
 
 void ModelTest::techIconMarkedForPreview()
