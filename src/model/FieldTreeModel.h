@@ -55,7 +55,8 @@ public:
         int minimum = 0;
         int maximum = 0;
         // Shown instead of the value, which follows in parentheses, e.g. the
-        // name of the tech a tech ID refers to.
+        // name of the tech a tech ID refers to. A code kind's label follows
+        // the value instead: "70 - Combatant".
         QString label = {};
         // What the value is the ID of. The label is looked up again after an
         // edit.

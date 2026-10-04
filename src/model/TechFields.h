@@ -24,7 +24,8 @@ struct TechRef
 // order. Groups appear in the order of their first field.
 const QList<FieldDesc<TechRef>> &techFields();
 
-// "2 - Age" style label for a tech Type value.
+// Name of a tech Type value ("Age" for 2), or "Unknown". Views show it as
+// "2 - Age".
 QString techTypeName(int type);
 
 } // namespace newage

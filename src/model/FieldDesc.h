@@ -30,7 +30,19 @@ enum class RefKind
     // An effect-command attribute index (hit points, line of sight, ...).
     // -1 is not an attribute.
     Attribute,
+    // Unit::Type (70 - Combatant, ...). A code, see isCodeKind().
+    UnitType,
+    // Tech::Type (0 - Regular, 2 - Age). A code, see isCodeKind().
+    TechType,
 };
+
+// Whether values of `kind` are codes from a fixed list (unit types) rather
+// than IDs of entities in the data. Views show codes as "70 - Combatant", as
+// AGE does, and references as "Archer (4)".
+inline bool isCodeKind(RefKind kind)
+{
+    return kind == RefKind::UnitType || kind == RefKind::TechType;
+}
 
 // An int field that is a frame index in a game sprite. The view may preview
 // it; the number in the field tree stays the value. Tech and unit icons are
@@ -48,6 +60,11 @@ enum class SpriteKind
 template <typename T>
 struct FieldDesc
 {
+    // Stable identifier for scripts and the CLI, unique within an entity kind:
+    // snake_case, with a dotted prefix for numbered slots ("hit_points",
+    // "cost1.amount"). Unlike `name`, it doesn't change when a label is
+    // reworded.
+    QString key;
     QString name;
     QString group;
     // Whether the field exists on this particular object, e.g. unit Speed only
@@ -71,8 +88,8 @@ struct FieldDesc
 // `[](auto &u) -> auto & { return u.HitPoints; }`. Integer members read as int
 // and accept their type's range; float members read as float.
 template <typename T, typename Access>
-FieldDesc<T> numberField(const QString &name, const QString &group, std::function<bool(const T &)> applies,
-                         Access access)
+FieldDesc<T> numberField(const QString &key, const QString &name, const QString &group,
+                         std::function<bool(const T &)> applies, Access access)
 {
     using Value = std::remove_cvref_t<decltype(access(std::declval<T &>()))>;
     static_assert(std::is_same_v<Value, float>
@@ -80,12 +97,12 @@ FieldDesc<T> numberField(const QString &name, const QString &group, std::functio
                           && (std::is_signed_v<Value> || sizeof(Value) < sizeof(int))),
                   "numberField needs a float member or an integer member that fits in int");
 
-    FieldDesc<T> field{name, group, std::move(applies), [access](const T &object) {
-                           if constexpr (std::is_same_v<Value, float>)
-                               return QVariant(access(object));
-                           else
-                               return QVariant(static_cast<int>(access(object)));
-                       }};
+    FieldDesc<T> field{key, name, group, std::move(applies), [access](const T &object) {
+                                if constexpr (std::is_same_v<Value, float>)
+                                    return QVariant(access(object));
+                                else
+                                    return QVariant(static_cast<int>(access(object)));
+                            }};
     field.set = [access](T &object, const QVariant &value) {
         if constexpr (std::is_same_v<Value, float>)
             access(object) = value.toFloat();

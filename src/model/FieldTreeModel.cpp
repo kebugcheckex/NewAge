@@ -86,6 +86,8 @@ QVariant FieldTreeModel::data(const QModelIndex &index, int role) const
     {
         if (index.column() == NameColumn)
             return row.name;
+        if (!row.label.isEmpty() && isCodeKind(row.ref))
+            return QStringLiteral("%1 - %2").arg(displayText(row.value), row.label);
         if (!row.label.isEmpty())
             return QStringLiteral("%1 (%2)").arg(row.label, displayText(row.value));
         if (row.note.isEmpty())

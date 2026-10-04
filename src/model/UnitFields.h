@@ -15,7 +15,8 @@ namespace newage {
 // order. Groups appear in the order of their first field.
 const QList<FieldDesc<genie::Unit>> &unitFields();
 
-// "70 - Combatant" style label for a unit Type value (AGE's names).
+// AGE's name for a unit Type value ("Combatant" for 70), or "Unknown". Views
+// show it as "70 - Combatant".
 QString unitTypeName(int type);
 
 } // namespace newage

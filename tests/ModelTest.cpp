@@ -3,6 +3,8 @@
 #include <QAbstractItemModelTester>
 #include <QDir>
 #include <QFile>
+#include <QRegularExpression>
+#include <QSet>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -116,6 +118,26 @@ const FieldDesc<T> &findField(const QList<FieldDesc<T>> &fields, const QString &
     return *std::find_if(fields.begin(), fields.end(), [&](const FieldDesc<T> &f) { return f.name == name; });
 }
 
+// Keys of `fields` in table order.
+template <typename T>
+QStringList fieldKeys(const QList<FieldDesc<T>> &fields)
+{
+    QStringList keys;
+    for (const FieldDesc<T> &field : fields)
+        keys << field.key;
+    return keys;
+}
+
+// Checks that `keys` are unique snake_case words, optionally after one dotted
+// slot prefix ("cost1.amount").
+void checkKeyFormat(const QStringList &keys)
+{
+    static const QRegularExpression format(QStringLiteral("^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$"));
+    for (const QString &key : keys)
+        QVERIFY2(format.match(key).hasMatch(), qPrintable(key));
+    QCOMPARE(QSet<QString>(keys.begin(), keys.end()).size(), keys.size());
+}
+
 } // namespace
 
 class ModelTest : public QObject
@@ -136,6 +158,8 @@ private slots:
     void techLabelsUseLanguageNames();
     void wrongVersionFailsToOpen();
     void editableFieldsRoundTrip();
+    void fieldKeysAreStable();
+    void typeFieldsAreCodes();
     void costFieldsSkipUnusedSlots();
     void resourceNamesPerVersion();
     void fieldTreeEditing();
@@ -183,7 +207,7 @@ void ModelTest::unitFieldsSkipSpeedBelowType20()
     unit.Speed = 1.5f;
     model.setObject(unitFields(), unit);
     QVERIFY(!fieldValue(model, QStringLiteral("Speed")).isValid());
-    QCOMPARE(fieldValue(model, QStringLiteral("Type")).toString(), QStringLiteral("10 - Eye Candy"));
+    QCOMPARE(fieldValue(model, QStringLiteral("Type")), QVariant(static_cast<int>(genie::UT_EyeCandy)));
 
     unit.Type = genie::UT_Creatable;
     model.setObject(unitFields(), unit);
@@ -243,12 +267,13 @@ void ModelTest::sampleUnitValues()
     FieldTreeModel fields;
     fields.setObject(unitFields(), *archer);
     QCOMPARE(fieldValue(fields, QStringLiteral("ID")).toInt(), 4);
-    QCOMPARE(fieldValue(fields, QStringLiteral("Type")).toString(), QStringLiteral("70 - Combatant"));
+    QCOMPARE(fieldValue(fields, QStringLiteral("Type")).toInt(), static_cast<int>(genie::UT_Creatable));
     QCOMPARE(fieldValue(fields, QStringLiteral("Hit points")).toInt(), 30);
     QCOMPARE(fieldValue(fields, QStringLiteral("Line of sight")).toFloat(), 6.0f);
     QCOMPARE(fieldValue(fields, QStringLiteral("Speed")).toFloat(), 0.96f);
     // The list model labels resource costs: 25 wood, 45 gold.
     units.showFields(4, fields);
+    QCOMPARE(fieldText(fields, QStringLiteral("Type")), QStringLiteral("70 - Combatant"));
     const QString className = unitClassName(session.gameVersion(), archer->Class);
     QVERIFY(!className.isEmpty());
     QCOMPARE(fieldText(fields, QStringLiteral("Class")), QStringLiteral("%1 (%2)").arg(className).arg(archer->Class));
@@ -343,7 +368,7 @@ void ModelTest::techFieldsFollowRequiredTechCount()
     tech.Type = 2;
     model.setObject(techFields(), TechRef{7, tech});
     QCOMPARE(fieldValue(model, QStringLiteral("ID")).toInt(), 7);
-    QCOMPARE(fieldValue(model, QStringLiteral("Type")).toString(), QStringLiteral("2 - Age"));
+    QCOMPARE(fieldValue(model, QStringLiteral("Type")), QVariant(2));
     // Unused slots (-1) are left out.
     QVERIFY(!fieldValue(model, QStringLiteral("Required tech 1")).isValid());
     std::fill(tech.RequiredTechs.begin(), tech.RequiredTechs.end(), 3);
@@ -430,7 +455,8 @@ void ModelTest::sampleTechValues()
     techs.showFields(22, fields);
     QCOMPARE(fieldValue(fields, QStringLiteral("ID")).toInt(), 22);
     QCOMPARE(fieldValue(fields, QStringLiteral("Internal name")).toString(), QStringLiteral("Loom"));
-    QCOMPARE(fieldValue(fields, QStringLiteral("Type")).toString(), QStringLiteral("0 - Regular"));
+    QCOMPARE(fieldValue(fields, QStringLiteral("Type")), QVariant(0));
+    QCOMPARE(fieldText(fields, QStringLiteral("Type")), QStringLiteral("0 - Regular"));
     QCOMPARE(fieldValue(fields, QStringLiteral("Civ")).toInt(), -1);
     QCOMPARE(fieldText(fields, QStringLiteral("Civ")), QStringLiteral("-1"));
     QCOMPARE(fieldValue(fields, QStringLiteral("Effect")).toInt(), 22);
@@ -464,7 +490,7 @@ void ModelTest::sampleTechValues()
 
     // Feudal Age is an age tech.
     techs.showFields(101, fields);
-    QCOMPARE(fieldValue(fields, QStringLiteral("Type")).toString(), QStringLiteral("2 - Age"));
+    QCOMPARE(fieldText(fields, QStringLiteral("Type")), QStringLiteral("2 - Age"));
 
     techs.showFields(-1, fields);
     QCOMPARE(fields.rowCount(), 0);
@@ -649,6 +675,155 @@ void ModelTest::editableFieldsRoundTrip()
     QVERIFY(editField(edited, QStringLiteral("Location"), 109));
     QCOMPARE(tech.ResearchLocations.front().LocationID, int16_t(109));
     QCOMPARE(fieldText(edited, QStringLiteral("Location")), QStringLiteral("Town Center (109)"));
+}
+
+// Keys are what scripts and the CLI use, so renaming one should be a
+// deliberate change to this list.
+void ModelTest::fieldKeysAreStable()
+{
+    const QStringList unitKeys = fieldKeys(unitFields());
+    checkKeyFormat(unitKeys);
+    QCOMPARE(unitKeys,
+             QStringList({"id",
+                          "type",
+                          "class",
+                          "internal_name",
+                          "language_name",
+                          "language_creation",
+                          "hit_points",
+                          "line_of_sight",
+                          "speed",
+                          "garrison_capacity",
+                          "resource_capacity",
+                          "cost1.resource",
+                          "cost1.amount",
+                          "cost1.paid",
+                          "cost2.resource",
+                          "cost2.amount",
+                          "cost2.paid",
+                          "cost3.resource",
+                          "cost3.amount",
+                          "cost3.paid",
+                          "train_location",
+                          "train_time",
+                          "collision_size_x",
+                          "collision_size_y",
+                          "collision_size_z",
+                          "standing_graphic1",
+                          "standing_graphic2",
+                          "dying_graphic",
+                          "icon",
+                          "enabled",
+                          "hide_in_editor"}));
+
+    const QStringList techKeys = fieldKeys(techFields());
+    checkKeyFormat(techKeys);
+    QCOMPARE(techKeys,
+             QStringList({"id",
+                          "internal_name",
+                          "language_name",
+                          "language_description",
+                          "type",
+                          "civ",
+                          "effect",
+                          "icon",
+                          "full_tech_mode",
+                          "required_tech1",
+                          "required_tech2",
+                          "required_tech3",
+                          "required_tech4",
+                          "required_tech5",
+                          "required_tech6",
+                          "required_tech_count",
+                          "cost1.resource",
+                          "cost1.amount",
+                          "cost1.paid",
+                          "cost2.resource",
+                          "cost2.amount",
+                          "cost2.paid",
+                          "cost3.resource",
+                          "cost3.amount",
+                          "cost3.paid",
+                          "research_location",
+                          "research_time",
+                          "button"}));
+
+    // Effect keys depend on each command's type; every type must still give
+    // unique keys within its command.
+    genie::Effect effect;
+    for (const int type : {0, 1, 2, 3, 4, 5, 6, 7, 8, 101, 102, 103, 99})
+    {
+        genie::EffectCommand command;
+        command.Type = static_cast<uint8_t>(type);
+        effect.EffectCommands.push_back(command);
+    }
+    for (const genie::GameVersion version : {genie::GV_AoE, genie::GV_TC, genie::GV_C2})
+        checkKeyFormat(fieldKeys(effectFields(effect, version)));
+
+    effect.EffectCommands.resize(2);
+    effect.EffectCommands.at(1).Type = 1;
+    genie::EffectCommand disable;
+    disable.Type = 102;
+    genie::EffectCommand unknown;
+    unknown.Type = 99;
+    effect.EffectCommands.push_back(disable);
+    effect.EffectCommands.push_back(unknown);
+    QCOMPARE(fieldKeys(effectFields(effect, genie::GV_C2)),
+             QStringList({"id",
+                          "internal_name",
+                          "command_count",
+                          "command1.type",
+                          "command1.unit",
+                          "command1.class",
+                          "command1.attribute",
+                          "command1.amount",
+                          "command2.type",
+                          "command2.resource",
+                          "command2.mode",
+                          "command2.multiply_resource",
+                          "command2.amount",
+                          "command3.type",
+                          "command3.tech",
+                          "command4.type",
+                          "command4.a",
+                          "command4.b",
+                          "command4.c",
+                          "command4.d"}));
+}
+
+// Unit and tech Type are stored numbers with a label, shown as AGE does.
+void ModelTest::typeFieldsAreCodes()
+{
+    const FieldTreeModel::RefNamer namer = [](RefKind kind, int id) {
+        if (kind == RefKind::UnitType)
+            return unitTypeName(id);
+        if (kind == RefKind::TechType)
+            return techTypeName(id);
+        return QString();
+    };
+
+    FieldTreeModel model;
+    genie::Unit unit;
+    unit.Type = genie::UT_Creatable;
+    model.setObject(unitFields(), unit, nullptr, {}, namer);
+    QModelIndex type = fieldIndex(model, QStringLiteral("Type"));
+    QCOMPARE(type.data(FieldTreeModel::ValueRole), QVariant(70));
+    QCOMPARE(type.data(FieldTreeModel::RefKindRole).toInt(), static_cast<int>(RefKind::UnitType));
+    QCOMPARE(type.data().toString(), QStringLiteral("70 - Combatant"));
+
+    unit.Type = 99;
+    model.setObject(unitFields(), unit, nullptr, {}, namer);
+    QCOMPARE(fieldText(model, QStringLiteral("Type")), QStringLiteral("99 - Unknown"));
+
+    genie::Tech tech;
+    tech.Type = 2;
+    model.setObject(techFields(), TechRef{7, tech}, nullptr, {}, namer);
+    type = fieldIndex(model, QStringLiteral("Type"));
+    QCOMPARE(type.data(FieldTreeModel::ValueRole), QVariant(2));
+    QCOMPARE(type.data(FieldTreeModel::RefKindRole).toInt(), static_cast<int>(RefKind::TechType));
+    QCOMPARE(type.data().toString(), QStringLiteral("2 - Age"));
+    QCOMPARE(techTypeName(0), QStringLiteral("Regular"));
+    QCOMPARE(techTypeName(5), QStringLiteral("Unknown"));
 }
 
 void ModelTest::costFieldsSkipUnusedSlots()

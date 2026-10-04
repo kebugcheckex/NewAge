@@ -70,6 +70,8 @@ void UnitListModel::showFields(int row, FieldTreeModel &fields)
             return unitClassName(session()->gameVersion(), id);
         if (kind == RefKind::Unit)
             return unitName(*session(), civ(), id);
+        if (kind == RefKind::UnitType)
+            return unitTypeName(id);
         return QString();
     };
     fields.setObject(unitFields(), *u, &session()->names(), writer, refNamer);

@@ -38,18 +38,18 @@ QString unitTypeName(int type)
 {
     switch (type)
     {
-    case genie::UT_EyeCandy: return QStringLiteral("10 - Eye Candy");
-    case genie::UT_Trees: return QStringLiteral("15 - Tree (AoK)");
-    case genie::UT_Flag: return QStringLiteral("20 - Animated");
-    case genie::UT_25: return QStringLiteral("25 - Doppelganger");
-    case genie::UT_Dead_Fish: return QStringLiteral("30 - Moving");
-    case genie::UT_Bird: return QStringLiteral("40 - Actor");
-    case genie::UT_Combatant: return QStringLiteral("50 - Superclass");
-    case genie::UT_Projectile: return QStringLiteral("60 - Projectile");
-    case genie::UT_Creatable: return QStringLiteral("70 - Combatant");
-    case genie::UT_Building: return QStringLiteral("80 - Building");
-    case genie::UT_AoeTrees: return QStringLiteral("90 - Tree (AoE)");
-    default: return QStringLiteral("%1 - Unknown").arg(type);
+    case genie::UT_EyeCandy: return QStringLiteral("Eye Candy");
+    case genie::UT_Trees: return QStringLiteral("Tree (AoK)");
+    case genie::UT_Flag: return QStringLiteral("Animated");
+    case genie::UT_25: return QStringLiteral("Doppelganger");
+    case genie::UT_Dead_Fish: return QStringLiteral("Moving");
+    case genie::UT_Bird: return QStringLiteral("Actor");
+    case genie::UT_Combatant: return QStringLiteral("Superclass");
+    case genie::UT_Projectile: return QStringLiteral("Projectile");
+    case genie::UT_Creatable: return QStringLiteral("Combatant");
+    case genie::UT_Building: return QStringLiteral("Building");
+    case genie::UT_AoeTrees: return QStringLiteral("Tree (AoE)");
+    default: return QStringLiteral("Unknown");
     }
 }
 
@@ -65,20 +65,26 @@ const QList<FieldDesc<Unit>> &unitFields()
         const QString flags = QStringLiteral("Flags");
 
         QList<FieldDesc<Unit>> list = {
-            {"ID", general, {}, [](const Unit &u) { return intValue(u.ID); }},
-            {"Type", general, {}, [](const Unit &u) { return QVariant(unitTypeName(u.Type)); }},
-            {"Class", general, {}, [](const Unit &u) { return intValue(u.Class); }},
-            {"Internal name", general, {}, [](const Unit &u) { return QVariant(QString::fromLatin1(u.Name)); }},
+            {"id", "ID", general, {}, [](const Unit &u) { return intValue(u.ID); }},
+            {"type", "Type", general, {}, [](const Unit &u) { return intValue(u.Type); }},
+            {"class", "Class", general, {}, [](const Unit &u) { return intValue(u.Class); }},
+            {"internal_name", "Internal name", general, {},
+             [](const Unit &u) { return QVariant(QString::fromLatin1(u.Name)); }},
             // genieutils widens the 16-bit variants into these on load, so the
             // 32-bit members are valid for every game version.
-            {"Language name", general, {}, [](const Unit &u) { return intValue(u.LanguageDLLName); }, true},
-            {"Language creation", general, {}, [](const Unit &u) { return intValue(u.LanguageDLLCreation); }, true},
+            {"language_name", "Language name", general, {},
+             [](const Unit &u) { return intValue(u.LanguageDLLName); }, true},
+            {"language_creation", "Language creation", general, {},
+             [](const Unit &u) { return intValue(u.LanguageDLLCreation); }, true},
 
-            numberField<Unit>("Hit points", stats, {}, [](auto &u) -> auto & { return u.HitPoints; }),
-            numberField<Unit>("Line of sight", stats, {}, [](auto &u) -> auto & { return u.LineOfSight; }),
-            numberField<Unit>("Speed", stats, hasSpeed, [](auto &u) -> auto & { return u.Speed; }),
-            {"Garrison capacity", stats, {}, [](const Unit &u) { return intValue(u.GarrisonCapacity); }},
-            {"Resource capacity", stats, {}, [](const Unit &u) { return intValue(u.ResourceCapacity); }},
+            numberField<Unit>("hit_points", "Hit points", stats, {}, [](auto &u) -> auto & { return u.HitPoints; }),
+            numberField<Unit>("line_of_sight", "Line of sight", stats, {},
+                              [](auto &u) -> auto & { return u.LineOfSight; }),
+            numberField<Unit>("speed", "Speed", stats, hasSpeed, [](auto &u) -> auto & { return u.Speed; }),
+            {"garrison_capacity", "Garrison capacity", stats, {},
+             [](const Unit &u) { return intValue(u.GarrisonCapacity); }},
+            {"resource_capacity", "Resource capacity", stats, {},
+             [](const Unit &u) { return intValue(u.ResourceCapacity); }},
         };
 
         // Always 3 slots (Creatable::getResourceCostsSize). Unused ones have
@@ -89,47 +95,57 @@ const QList<FieldDesc<Unit>> &unitFields()
                 return isCreatable(u) && i < static_cast<int>(u.Creatable.ResourceCosts.size())
                        && u.Creatable.ResourceCosts.at(i).Type >= 0;
             };
+            const QString slot = QString::number(i + 1);
             FieldDesc<Unit> resource = numberField<Unit>(
-                QStringLiteral("Cost %1 resource").arg(i + 1), costs, applies,
-                [i](auto &u) -> auto & { return u.Creatable.ResourceCosts.at(i).Type; });
+                QStringLiteral("cost%1.resource").arg(slot), QStringLiteral("Cost %1 resource").arg(slot), costs,
+                applies, [i](auto &u) -> auto & { return u.Creatable.ResourceCosts.at(i).Type; });
             resource.ref = RefKind::Resource;
             list.append(resource);
-            list.append(numberField<Unit>(QStringLiteral("Cost %1 amount").arg(i + 1), costs, applies,
+            list.append(numberField<Unit>(QStringLiteral("cost%1.amount").arg(slot),
+                                          QStringLiteral("Cost %1 amount").arg(slot), costs, applies,
                                           [i](auto &u) -> auto & { return u.Creatable.ResourceCosts.at(i).Amount; }));
             // 1: the amount is paid; 0: it only has to be available.
-            list.append(numberField<Unit>(QStringLiteral("Cost %1 paid").arg(i + 1), costs, applies,
+            list.append(numberField<Unit>(QStringLiteral("cost%1.paid").arg(slot),
+                                          QStringLiteral("Cost %1 paid").arg(slot), costs, applies,
                                           [i](auto &u) -> auto & { return u.Creatable.ResourceCosts.at(i).Flag; }));
         }
 
         // DE can list several train locations; only the first is shown for now.
         // LocationID is the building, labelled like a research location.
-        FieldDesc<Unit> trainAt{QStringLiteral("Train location"), training, hasTrainLocation,
-                                [](const Unit &u) {
+        FieldDesc<Unit> trainAt{QStringLiteral("train_location"), QStringLiteral("Train location"), training,
+                                hasTrainLocation, [](const Unit &u) {
                                     return intValue(u.Creatable.TrainLocations.front().LocationID);
                                 }};
         trainAt.ref = RefKind::Unit;
         list.append(trainAt);
-        list.append(numberField<Unit>("Train time", training, hasTrainLocation,
+        list.append(numberField<Unit>("train_time", "Train time", training, hasTrainLocation,
                                       [](auto &u) -> auto & { return u.Creatable.TrainLocations.front().QueueTime; }));
 
         list += QList<FieldDesc<Unit>>{
-            {"Collision size X", size, {}, [](const Unit &u) { return QVariant(u.CollisionSize.x); }},
-            {"Collision size Y", size, {}, [](const Unit &u) { return QVariant(u.CollisionSize.y); }},
-            {"Collision size Z", size, {}, [](const Unit &u) { return QVariant(u.CollisionSize.z); }},
+            {"collision_size_x", "Collision size X", size, {},
+             [](const Unit &u) { return QVariant(u.CollisionSize.x); }},
+            {"collision_size_y", "Collision size Y", size, {},
+             [](const Unit &u) { return QVariant(u.CollisionSize.y); }},
+            {"collision_size_z", "Collision size Z", size, {},
+             [](const Unit &u) { return QVariant(u.CollisionSize.z); }},
 
-            {"Standing graphic 1", graphics, {}, [](const Unit &u) { return intValue(u.StandingGraphic.first); }},
-            {"Standing graphic 2", graphics, {}, [](const Unit &u) { return intValue(u.StandingGraphic.second); }},
-            {"Dying graphic", graphics, {}, [](const Unit &u) { return intValue(u.DyingGraphic); }},
-            {"Icon", graphics, {}, [](const Unit &u) { return intValue(u.IconID); }},
+            {"standing_graphic1", "Standing graphic 1", graphics, {},
+             [](const Unit &u) { return intValue(u.StandingGraphic.first); }},
+            {"standing_graphic2", "Standing graphic 2", graphics, {},
+             [](const Unit &u) { return intValue(u.StandingGraphic.second); }},
+            {"dying_graphic", "Dying graphic", graphics, {}, [](const Unit &u) { return intValue(u.DyingGraphic); }},
+            {"icon", "Icon", graphics, {}, [](const Unit &u) { return intValue(u.IconID); }},
 
-            {"Enabled", flags, {}, [](const Unit &u) { return intValue(u.Enabled); }},
-            {"Hide in editor", flags, {}, [](const Unit &u) { return intValue(u.HideInEditor); }},
+            {"enabled", "Enabled", flags, {}, [](const Unit &u) { return intValue(u.Enabled); }},
+            {"hide_in_editor", "Hide in editor", flags, {}, [](const Unit &u) { return intValue(u.HideInEditor); }},
         };
         for (FieldDesc<Unit> &field : list)
         {
-            if (field.name == QStringLiteral("Class"))
+            if (field.key == QStringLiteral("type"))
+                field.ref = RefKind::UnitType;
+            if (field.key == QStringLiteral("class"))
                 field.ref = RefKind::UnitClass;
-            if (field.name == QStringLiteral("Icon"))
+            if (field.key == QStringLiteral("icon"))
                 field.sprite = SpriteKind::UnitIcon;
         }
         return list;

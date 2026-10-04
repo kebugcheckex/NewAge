@@ -122,6 +122,7 @@ void TechListModel::showFields(int row, FieldTreeModel &fields)
             return QString::fromLatin1(effects[id].Name);
         }
         case RefKind::Unit: return unitName(*session(), civ(), id);
+        case RefKind::TechType: return techTypeName(id);
         default: return QString();
         }
     };
