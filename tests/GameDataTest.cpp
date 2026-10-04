@@ -1,11 +1,13 @@
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QTest>
 
 #include "core/GameInstall.h"
 #include "core/NameProvider.h"
 #include "core/Session.h"
+#include "core/SpriteLibrary.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
 
@@ -56,6 +58,9 @@ private slots:
     void detectsNothingElsewhere();
     void openDatasetLoadsNames();
     void realInstall();
+    void techIconSlpFollowsVersion();
+    void spriteSourceFollowsInstallLayout();
+    void missingSpriteFrameIsEmpty();
 };
 
 void GameDataTest::parseKeyValueSample()
@@ -276,6 +281,76 @@ void GameDataTest::realInstall()
         const genie::Unit &castle = session.dat()->Civs.at(1).Units.at(82);
         QCOMPARE(session.names().text(castle.LanguageDLLName), QStringLiteral("Castle"));
     }
+}
+
+void GameDataTest::techIconSlpFollowsVersion()
+{
+    QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_AoE, 3), 50729);
+    QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_TC, 3), 50729);
+    QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_Cysion, 1), 50729);
+    QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_C2, 9), 50729);
+    QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_SWGB, 2), 50691);
+    QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_SWGB, -1), 50689);
+    QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_CC, 1), 53261);
+    QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_CCV, 0), 53260);
+    QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_CCV2, 4), 53364);
+}
+
+void GameDataTest::spriteSourceFollowsInstallLayout()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    auto folderName = [](const QString &path) {
+        return QFileInfo(path).fileName().toLower();
+    };
+
+    QVERIFY(writeFile(dir.path(), QStringLiteral("data/empires2.dat")));
+    QVERIFY(writeFile(dir.path(), QStringLiteral("data/interfac.drs"), QByteArray(8, '\0')));
+    const SpriteSource classic =
+        locateSpriteSource(QDir(dir.path()).filePath(QStringLiteral("data/empires2.dat")), genie::GV_TC);
+    QCOMPARE(classic.looseFolder, QString());
+    QCOMPARE(classic.drsFolders.size(), 1);
+    QCOMPARE(folderName(classic.drsFolders.at(0)), QStringLiteral("data"));
+
+    QVERIFY(writeFile(dir.path(), QStringLiteral("data2/empires.dat")));
+    QVERIFY(writeFile(dir.path(), QStringLiteral("data2/interfac.drs"), QByteArray(8, '\0')));
+    const SpriteSource ror =
+        locateSpriteSource(QDir(dir.path()).filePath(QStringLiteral("data2/empires.dat")), genie::GV_RoR);
+    QCOMPARE(ror.drsFolders.size(), 2);
+    QCOMPARE(folderName(ror.drsFolders.at(0)), QStringLiteral("data2"));
+    QCOMPARE(folderName(ror.drsFolders.at(1)), QStringLiteral("data"));
+
+    QVERIFY(writeFile(dir.path(), QStringLiteral("resources/_common/dat/empires2_x2_p1.dat")));
+    QVERIFY(writeFile(dir.path(), QStringLiteral("resources/_common/drs/interface/50500.bina")));
+    const SpriteSource hd = locateSpriteSource(
+        QDir(dir.path()).filePath(QStringLiteral("resources/_common/dat/empires2_x2_p1.dat")), genie::GV_Cysion);
+    QVERIFY(folderName(hd.looseFolder) == QStringLiteral("drs"));
+    QVERIFY(hd.drsFolders.isEmpty());
+
+    QVERIFY(writeFile(dir.path(), QStringLiteral("Data/empires.dat")));
+    QVERIFY(writeFile(dir.path(), QStringLiteral("Data/DRS/interfac.drs"), QByteArray(8, '\0')));
+    const SpriteSource aoeDe =
+        locateSpriteSource(QDir(dir.path()).filePath(QStringLiteral("Data/empires.dat")), genie::GV_Tapsa);
+    QCOMPARE(aoeDe.drsFolders.size(), 1);
+    QCOMPARE(folderName(aoeDe.drsFolders.at(0)), QStringLiteral("drs"));
+}
+
+void GameDataTest::missingSpriteFrameIsEmpty()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString dat = QDir(dir.path()).filePath(QStringLiteral("loose.dat"));
+    QVERIFY(writeFile(dir.path(), QStringLiteral("loose.dat")));
+
+    SpriteLibrary library;
+    library.setSource(dat, genie::GV_TC);
+    QVERIFY(library.frame(50729, 0).isNull());
+    QVERIFY(library.frame(50729, -1).isNull());
+
+    QVERIFY(writeFile(dir.path(), QStringLiteral("interfac.drs")));
+    library.setSource(dat, genie::GV_TC);
+    QVERIFY(library.frame(50729, 0).isNull());
 }
 
 QTEST_GUILESS_MAIN(GameDataTest)

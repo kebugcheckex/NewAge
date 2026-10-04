@@ -117,6 +117,7 @@ private slots:
     void costFieldsSkipUnusedSlots();
     void resourceNamesPerVersion();
     void fieldTreeEditing();
+    void techIconMarkedForPreview();
     void referenceLabelFollowsEdits();
     void editAndSaveSample();
 
@@ -742,6 +743,27 @@ void ModelTest::editAndSaveSample()
     QVERIFY(!session.saveAs(dir.filePath(QStringLiteral("missing/edited.dat")), &error));
     QVERIFY(session.isModified());
     QCOMPARE(session.datPath(), dat);
+}
+
+void ModelTest::techIconMarkedForPreview()
+{
+    genie::Tech tech;
+    tech.IconID = 18;
+    FieldTreeModel model;
+    model.setObject(techFields(), TechRef{1, tech});
+    const QModelIndex icon = fieldIndex(model, QStringLiteral("Icon"));
+    QCOMPARE(icon.data().toString(), QStringLiteral("18"));
+    QCOMPARE(icon.data(FieldTreeModel::SpriteRole).toInt(), static_cast<int>(SpriteKind::TechIcon));
+    QCOMPARE(icon.siblingAtColumn(FieldTreeModel::NameColumn).data(FieldTreeModel::SpriteRole).toInt(),
+             static_cast<int>(SpriteKind::TechIcon));
+    QCOMPARE(fieldIndex(model, QStringLiteral("Effect")).data(FieldTreeModel::SpriteRole).toInt(),
+             static_cast<int>(SpriteKind::None));
+
+    // Unit icons are a different sprite. The shared preview must not treat them as tech icons.
+    genie::Unit unit;
+    model.setObject(unitFields(), unit);
+    QCOMPARE(fieldIndex(model, QStringLiteral("Icon")).data(FieldTreeModel::SpriteRole).toInt(),
+             static_cast<int>(SpriteKind::None));
 }
 
 QTEST_GUILESS_MAIN(ModelTest)

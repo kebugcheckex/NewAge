@@ -1,6 +1,11 @@
 #pragma once
 
+#include <QImage>
+#include <QModelIndex>
 #include <QWidget>
+
+class QHideEvent;
+class QLabel;
 
 // Needed for HideInactiveEntry: MSVC picks a pointer-to-member's size from what
 // it knows about the class at that point, so a forward declaration here would
@@ -37,8 +42,19 @@ public:
 
     EntityListModel *model() const { return listModel_; }
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+    void changeEvent(QEvent *event) override;
+
 private:
     void reloadCivs();
+    bool isTechIconRow(const QModelIndex &index) const;
+    QImage techIconImage(const QModelIndex &index) const;
+    // Global point beside the value cell, or null if that cell isn't on screen.
+    QPoint techIconAnchor(const QModelIndex &index) const;
+    void showTechIcon(const QModelIndex &index, const QPoint &globalPos);
+    void hideTechIcon();
     void showCiv(int civ);
     void showSelected();
     // Entity ID (row in the list model) of the selection, or -1.
@@ -57,6 +73,7 @@ private:
     QLineEdit *filterEdit_;
     QListView *listView_;
     QTreeView *fieldView_;
+    QLabel *iconPopup_ = nullptr;
 };
 
 } // namespace newage

@@ -27,6 +27,15 @@ enum class RefKind
     Unit,
 };
 
+// An int field that is a frame index in a game sprite. The view may preview
+// it; the number in the field tree stays the value. Unit icons are a different
+// sprite and are not marked here.
+enum class SpriteKind
+{
+    None,
+    TechIcon,
+};
+
 // Describes one field of an entity type T (a unit, a tech, ...), so views can
 // show any entity without per-field widget code.
 // Only number fields can be editable; build those with numberField().
@@ -48,6 +57,7 @@ struct FieldDesc
     int minimum = 0;
     int maximum = 0;
     RefKind ref = RefKind::None;
+    SpriteKind sprite = SpriteKind::None;
 };
 
 // An editable field for a number member of T. `access` returns a reference to

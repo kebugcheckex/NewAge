@@ -46,6 +46,9 @@ const QList<FieldDesc<TechRef>> &techFields()
         FieldDesc<TechRef> effect{QStringLiteral("Effect"), general, {},
                                   [](const TechRef &t) { return intValue(t.tech.EffectID); }};
         effect.ref = RefKind::Effect;
+        FieldDesc<TechRef> icon{QStringLiteral("Icon"), general, {},
+                                [](const TechRef &t) { return intValue(t.tech.IconID); }};
+        icon.sprite = SpriteKind::TechIcon;
 
         QList<FieldDesc<TechRef>> list = {
             {"ID", general, {}, [](const TechRef &t) { return QVariant(t.id); }},
@@ -58,7 +61,7 @@ const QList<FieldDesc<TechRef>> &techFields()
             {"Type", general, {}, [](const TechRef &t) { return QVariant(techTypeName(t.tech.Type)); }},
             civ,
             effect,
-            {"Icon", general, {}, [](const TechRef &t) { return intValue(t.tech.IconID); }},
+            icon,
             {"Full tech mode", general, {}, [](const TechRef &t) { return intValue(t.tech.FullTechMode); }},
         };
 

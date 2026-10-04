@@ -78,6 +78,8 @@ QVariant FieldTreeModel::data(const QModelIndex &index, int role) const
     }
 
     const Row &row = *rowAt(index);
+    if (role == SpriteRole)
+        return static_cast<int>(row.sprite);
     if (role == Qt::DisplayRole)
     {
         if (index.column() == NameColumn)

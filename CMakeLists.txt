@@ -29,6 +29,8 @@ add_library(newage_core STATIC
   src/core/NameProvider.h
   src/core/Session.cpp
   src/core/Session.h
+  src/core/SpriteLibrary.cpp
+  src/core/SpriteLibrary.h
   src/core/VersionProfile.cpp
   src/core/VersionProfile.h
 )

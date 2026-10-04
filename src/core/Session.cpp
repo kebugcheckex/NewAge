@@ -91,6 +91,7 @@ bool Session::loadDat(const QString &datPath, const VersionProfile &profile, QSt
     // genieutils may detect a more specific version from the file header.
     gameVersion_ = dat_->getGameVersion();
     datPath_ = datPath;
+    sprites_.setSource(datPath_, gameVersion_);
     setModified(false);
     return true;
 }
@@ -160,6 +161,7 @@ void Session::close()
 
     dat_.reset();
     names_.clear();
+    sprites_.clear();
     gameVersion_ = genie::GV_None;
     datPath_.clear();
     setModified(false);

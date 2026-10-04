@@ -32,6 +32,9 @@ public:
         // int: the range an editable int field accepts, inclusive.
         MinimumRole,
         MaximumRole,
+        // int(SpriteKind). Set on both columns of a sprite field, so a hover
+        // on the name or the value can preview it. None for everything else.
+        SpriteRole,
     };
 
     // One field with its value already read from the object.
@@ -54,6 +57,7 @@ public:
         // What the value is the ID of. The label is looked up again after an
         // edit.
         RefKind ref = RefKind::None;
+        SpriteKind sprite = SpriteKind::None;
     };
 
     // Stores `value` (int or float, checked against the row's range) in field
@@ -86,6 +90,7 @@ public:
             if (field.isStringId && names)
                 row.note = names->text(row.value.toInt());
             row.ref = field.ref;
+            row.sprite = field.sprite;
             if (row.ref != RefKind::None && refNamer)
                 row.label = refNamer(row.ref, row.value.toInt());
             if (field.set)

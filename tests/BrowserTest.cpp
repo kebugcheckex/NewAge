@@ -219,6 +219,10 @@ void BrowserTest::browseSampleTechs()
     const QString civName = QString::fromLatin1(session.dat()->Civs.at(1).Name);
     QCOMPARE(shownValue(fields, QStringLiteral("Civ")), QStringLiteral("%1 (1)").arg(civName));
     QCOMPARE(shownValue(fields, QStringLiteral("Cost 1 amount")), QStringLiteral("750"));
+    const QModelIndex icon = valueIndex(fields, QStringLiteral("Icon"));
+    QVERIFY(icon.isValid());
+    QVERIFY(!icon.data().toString().isEmpty());
+    QCOMPARE(icon.data(FieldTreeModel::SpriteRole).toInt(), static_cast<int>(SpriteKind::TechIcon));
 
     // Another civ can't research it, but it stays selected and shown.
     civs->setCurrentIndex(2);

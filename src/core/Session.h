@@ -7,6 +7,7 @@
 #include <QStringList>
 
 #include "core/NameProvider.h"
+#include "core/SpriteLibrary.h"
 #include "genie/Types.h"
 
 namespace genie {
@@ -54,6 +55,10 @@ public:
     const QString &datPath() const { return datPath_; }
     // Language strings of the open data; empty when none were loaded.
     const NameProvider &names() const { return names_; }
+    // Interface sprites next to the opened .dat. Empty, and frame() null,
+    // when the file isn't inside an install. Not retargeted by Save As.
+    SpriteLibrary &sprites() { return sprites_; }
+    const SpriteLibrary &sprites() const { return sprites_; }
 
     bool isModified() const { return modified_; }
     void setModified(bool modified);
@@ -71,6 +76,7 @@ private:
     genie::GameVersion gameVersion_ = genie::GV_None;
     QString datPath_;
     NameProvider names_;
+    SpriteLibrary sprites_;
     bool modified_ = false;
 };
 

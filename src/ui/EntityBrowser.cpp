@@ -1,9 +1,19 @@
 #include "ui/EntityBrowser.h"
 
+#include <QAbstractSlider>
 #include <QComboBox>
+#include <QFrame>
+#include <QGuiApplication>
 #include <QHeaderView>
+#include <QHelpEvent>
+#include <QHideEvent>
+#include <QImage>
+#include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QPixmap>
+#include <QScreen>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStyledItemDelegate>
@@ -12,6 +22,7 @@
 
 #include "core/Config.h"
 #include "core/Session.h"
+#include "core/SpriteLibrary.h"
 #include "genie/dat/DatFile.h"
 #include "model/EntityListModel.h"
 #include "model/FieldTreeModel.h"
@@ -89,6 +100,20 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
     fieldView_->setSelectionBehavior(QAbstractItemView::SelectRows);
     fieldView_->setAlternatingRowColors(true);
     fieldView_->header()->setSectionResizeMode(FieldTreeModel::NameColumn, QHeaderView::ResizeToContents);
+    fieldView_->viewport()->installEventFilter(this);
+
+    iconPopup_ = new QLabel(this);
+    iconPopup_->setObjectName(QStringLiteral("techIconPopup"));
+    iconPopup_->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint);
+    iconPopup_->setAttribute(Qt::WA_ShowWithoutActivating);
+    iconPopup_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    iconPopup_->setMargin(4);
+    iconPopup_->setAutoFillBackground(true);
+    iconPopup_->setBackgroundRole(QPalette::Base);
+    iconPopup_->setFrameShape(QFrame::Box);
+    iconPopup_->setFrameShadow(QFrame::Plain);
+    iconPopup_->setLineWidth(1);
+    iconPopup_->hide();
 
     auto *left = new QWidget(this);
     auto *leftLayout = new QVBoxLayout(left);
@@ -125,11 +150,32 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
             fieldView_->edit(index.siblingAtColumn(FieldTreeModel::ValueColumn));
     });
     connect(fieldModel_, &QAbstractItemModel::modelReset, this, [this] {
+        hideTechIcon();
         // Group headings span both columns so they read as section titles.
         for (int row = 0; row < fieldModel_->rowCount(); ++row)
             fieldView_->setFirstColumnSpanned(row, {}, true);
         fieldView_->expandAll();
     });
+    connect(fieldView_->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            [this](const QModelIndex &current) {
+                if (!isTechIconRow(current))
+                {
+                    hideTechIcon();
+                    return;
+                }
+                showTechIcon(current, techIconAnchor(current));
+            });
+    const auto followScroll = [this] {
+        const QModelIndex current = fieldView_->currentIndex();
+        if (!isTechIconRow(current))
+        {
+            hideTechIcon();
+            return;
+        }
+        showTechIcon(current, techIconAnchor(current));
+    };
+    connect(fieldView_->verticalScrollBar(), &QAbstractSlider::valueChanged, this, followScroll);
+    connect(fieldView_->horizontalScrollBar(), &QAbstractSlider::valueChanged, this, followScroll);
 
     applyConfig();
     reloadCivs();
@@ -184,6 +230,138 @@ void EntityBrowser::applyConfig()
     listFilter_->setHideInactive((config_->*hideInactive_)());
     if (listView_->currentIndex().isValid())
         listView_->scrollTo(listView_->currentIndex());
+}
+
+bool EntityBrowser::isTechIconRow(const QModelIndex &index) const
+{
+    return index.isValid() && index.parent().isValid()
+           && index.data(FieldTreeModel::SpriteRole).toInt() == static_cast<int>(SpriteKind::TechIcon);
+}
+
+QImage EntityBrowser::techIconImage(const QModelIndex &index) const
+{
+    if (!session_->isOpen() || !isTechIconRow(index))
+        return {};
+    const int iconId = index.siblingAtColumn(FieldTreeModel::ValueColumn).data(FieldTreeModel::ValueRole).toInt();
+    if (iconId < 0)
+        return {};
+
+    int iconSet = 0;
+    const int civ = listModel_->civ();
+    const auto &civs = session_->dat()->Civs;
+    if (civ >= 0 && civ < static_cast<int>(civs.size()))
+        iconSet = civs[static_cast<size_t>(civ)].IconSet;
+
+    const SpriteImage sprite = session_->sprites().frame(SpriteLibrary::techIconSlpId(session_->gameVersion(), iconSet), iconId);
+    if (sprite.isNull())
+        return {};
+    // copy() detaches from the buffer SpriteImage is about to leave.
+    return QImage(reinterpret_cast<const uchar *>(sprite.rgba.constData()), sprite.width, sprite.height,
+                  sprite.width * 4, QImage::Format_RGBA8888)
+        .copy();
+}
+
+QPoint EntityBrowser::techIconAnchor(const QModelIndex &index) const
+{
+    const QModelIndex value = index.siblingAtColumn(FieldTreeModel::ValueColumn);
+    const QRect rect = fieldView_->visualRect(value);
+    if (!rect.isValid() || !fieldView_->viewport()->rect().intersects(rect))
+        return {};
+    return fieldView_->viewport()->mapToGlobal(rect.topRight() + QPoint(8, 0));
+}
+
+void EntityBrowser::showTechIcon(const QModelIndex &index, const QPoint &globalPos)
+{
+    if (globalPos.isNull())
+    {
+        hideTechIcon();
+        return;
+    }
+    QImage image = techIconImage(index);
+    if (image.isNull())
+    {
+        hideTechIcon();
+        return;
+    }
+
+    // Nearest-neighbour up to the screen scale, then mark that scale so the
+    // icon stays its native logical size and doesn't get scaled twice.
+    const int scale = qBound(1, qRound(fieldView_->devicePixelRatioF()), 3);
+    if (scale != 1)
+        image = image.scaled(image.width() * scale, image.height() * scale, Qt::IgnoreAspectRatio,
+                             Qt::FastTransformation);
+    image.setDevicePixelRatio(scale);
+    iconPopup_->setPixmap(QPixmap::fromImage(image));
+    iconPopup_->adjustSize();
+
+    QPoint pos = globalPos;
+    QScreen *screen = QGuiApplication::screenAt(globalPos);
+    if (!screen)
+        screen = this->screen();
+    if (screen)
+    {
+        const QRect avail = screen->availableGeometry();
+        const QSize size = iconPopup_->size();
+        if (pos.x() + size.width() > avail.right())
+            pos.setX(qMax(avail.left(), globalPos.x() - size.width() - 8));
+        if (pos.y() + size.height() > avail.bottom())
+            pos.setY(qMax(avail.top(), globalPos.y() - size.height() - 8));
+        pos.setX(qBound(avail.left(), pos.x(), qMax(avail.left(), avail.right() - size.width() + 1)));
+        pos.setY(qBound(avail.top(), pos.y(), qMax(avail.top(), avail.bottom() - size.height() + 1)));
+    }
+    iconPopup_->move(pos);
+    iconPopup_->show();
+}
+
+void EntityBrowser::hideTechIcon()
+{
+    if (iconPopup_)
+        iconPopup_->hide();
+}
+
+bool EntityBrowser::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == fieldView_->viewport())
+    {
+        if (event->type() == QEvent::ToolTip)
+        {
+            const auto *help = static_cast<const QHelpEvent *>(event);
+            const QModelIndex index = fieldView_->indexAt(help->pos());
+            if (isTechIconRow(index))
+            {
+                showTechIcon(index, help->globalPos() + QPoint(16, 16));
+                return true;
+            }
+            // Moving off the icon row: keep a keyboard preview beside the cell,
+            // otherwise drop the hover preview.
+            if (isTechIconRow(fieldView_->currentIndex()))
+                showTechIcon(fieldView_->currentIndex(), techIconAnchor(fieldView_->currentIndex()));
+            else
+                hideTechIcon();
+        }
+        else if (event->type() == QEvent::Leave)
+        {
+            const QModelIndex current = fieldView_->currentIndex();
+            if (isTechIconRow(current))
+                showTechIcon(current, techIconAnchor(current));
+            else
+                hideTechIcon();
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void EntityBrowser::hideEvent(QHideEvent *event)
+{
+    hideTechIcon();
+    QWidget::hideEvent(event);
+}
+
+void EntityBrowser::changeEvent(QEvent *event)
+{
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
+        hideTechIcon();
+    QWidget::changeEvent(event);
 }
 
 } // namespace newage
