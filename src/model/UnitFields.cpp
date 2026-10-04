@@ -102,8 +102,13 @@ const QList<FieldDesc<Unit>> &unitFields()
         }
 
         // DE can list several train locations; only the first is shown for now.
-        list.append({"Train location", training, hasTrainLocation,
-                     [](const Unit &u) { return intValue(u.Creatable.TrainLocations.front().LocationID); }});
+        // LocationID is the building, labelled like a research location.
+        FieldDesc<Unit> trainAt{QStringLiteral("Train location"), training, hasTrainLocation,
+                                [](const Unit &u) {
+                                    return intValue(u.Creatable.TrainLocations.front().LocationID);
+                                }};
+        trainAt.ref = RefKind::Unit;
+        list.append(trainAt);
         list.append(numberField<Unit>("Train time", training, hasTrainLocation,
                                       [](auto &u) -> auto & { return u.Creatable.TrainLocations.front().QueueTime; }));
 
@@ -124,6 +129,8 @@ const QList<FieldDesc<Unit>> &unitFields()
         {
             if (field.name == QStringLiteral("Class"))
                 field.ref = RefKind::UnitClass;
+            if (field.name == QStringLiteral("Icon"))
+                field.sprite = SpriteKind::UnitIcon;
         }
         return list;
     }();

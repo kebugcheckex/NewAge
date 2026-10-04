@@ -58,12 +58,12 @@ protected:
 
 private:
     void reloadCivs();
-    bool isTechIconRow(const QModelIndex &index) const;
-    QImage techIconImage(const QModelIndex &index) const;
+    bool isIconRow(const QModelIndex &index) const;
+    QImage iconImage(const QModelIndex &index) const;
     // Global point beside the value cell, or null if that cell isn't on screen.
-    QPoint techIconAnchor(const QModelIndex &index) const;
-    void showTechIcon(const QModelIndex &index, const QPoint &globalPos);
-    void hideTechIcon();
+    QPoint iconAnchor(const QModelIndex &index) const;
+    void showIcon(const QModelIndex &index, const QPoint &globalPos);
+    void hideIcon();
     void showCiv(int civ);
     void showSelected();
     // Entity ID (row in the list model) of the selection, or -1.

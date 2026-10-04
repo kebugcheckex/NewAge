@@ -62,6 +62,8 @@ add_library(newage_model STATIC
   src/model/UnitFields.h
   src/model/UnitListModel.cpp
   src/model/UnitListModel.h
+  src/model/UnitNames.cpp
+  src/model/UnitNames.h
 )
 target_link_libraries(newage_model PUBLIC newage_core)
 

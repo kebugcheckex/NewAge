@@ -6,6 +6,7 @@
 #include "model/FieldTreeModel.h"
 #include "model/ResourceNames.h"
 #include "model/UnitFields.h"
+#include "model/UnitNames.h"
 
 namespace newage {
 
@@ -67,6 +68,8 @@ void UnitListModel::showFields(int row, FieldTreeModel &fields)
             return resourceName(session()->gameVersion(), id);
         if (kind == RefKind::UnitClass)
             return unitClassName(session()->gameVersion(), id);
+        if (kind == RefKind::Unit)
+            return unitName(*session(), civ(), id);
         return QString();
     };
     fields.setObject(unitFields(), *u, &session()->names(), writer, refNamer);

@@ -33,12 +33,13 @@ enum class RefKind
 };
 
 // An int field that is a frame index in a game sprite. The view may preview
-// it; the number in the field tree stays the value. Unit icons are a different
-// sprite and are not marked here.
+// it; the number in the field tree stays the value. Tech and unit icons are
+// different sprites.
 enum class SpriteKind
 {
     None,
     TechIcon,
+    UnitIcon,
 };
 
 // Describes one field of an entity type T (a unit, a tech, ...), so views can

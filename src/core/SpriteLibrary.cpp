@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QHash>
 
+#include "genie/dat/Unit.h"
 #include "genie/resource/Color.h"
 #include "genie/resource/DrsFile.h"
 #include "genie/resource/PalFile.h"
@@ -507,6 +508,44 @@ int SpriteLibrary::techIconSlpId(genie::GameVersion version, int iconSet)
     if (version == genie::GV_SWGB)
         return 50689 + iconSet;
     return 50729;
+}
+
+int SpriteLibrary::unitIconSlpId(genie::GameVersion version, int iconSet, int type, int unitClass)
+{
+    if (iconSet < 0)
+        iconSet = 0;
+    // AGE's unit-icon table (Units.cpp). Type 80 uses the building-icon SLP,
+    // except packed and unpacked siege — AoE/AoE2 classes 51 and 54, SWGB
+    // classes 34 and 36 — which share the unit-icon SLP. AoE and AoE2 ignore
+    // the civ icon set for unit icons. CC/EF bases are the ini defaults
+    // (building 53240 / 53300, unit 53250 / 53330).
+    const bool swgb = version >= genie::GV_SWGB;
+    const bool buildingIcons = type == genie::UT_Building
+                               && (swgb ? unitClass != 34 && unitClass != 36 : unitClass != 51 && unitClass != 54);
+    if (buildingIcons)
+    {
+        int base = 50704;
+        if (version >= genie::GV_CCV2)
+            base = 53300;
+        else if (version >= genie::GV_CC)
+            base = 53240;
+        return base + iconSet;
+    }
+    if (version >= genie::GV_CCV2)
+        return 53330 + iconSet;
+    if (version >= genie::GV_CC)
+        return 53250 + iconSet;
+    if (version == genie::GV_SWGB)
+        return 50733 + iconSet;
+    return 50730;
+}
+
+int SpriteLibrary::unitIconFrame(int iconId, int type, int graphicsAngle)
+{
+    // Only buildings store GraphicsAngle; AGE adds it to the icon frame.
+    if (type == genie::UT_Building)
+        return iconId + graphicsAngle;
+    return iconId;
 }
 
 } // namespace newage

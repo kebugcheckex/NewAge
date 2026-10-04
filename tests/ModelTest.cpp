@@ -125,6 +125,7 @@ private slots:
     void fieldTreeGroupsRowsInFirstSeenOrder();
     void floatsDisplayShortest();
     void unitFieldsSkipSpeedBelowType20();
+    void unitTrainLocationShowsName();
     void sampleUnitValues();
     void labelsUseLanguageNames();
     void techFieldsFollowRequiredTechCount();
@@ -188,6 +189,29 @@ void ModelTest::unitFieldsSkipSpeedBelowType20()
     QCOMPARE(fieldValue(model, QStringLiteral("Speed")).toFloat(), 1.5f);
 }
 
+void ModelTest::unitTrainLocationShowsName()
+{
+    genie::Unit unit;
+    unit.Type = genie::UT_Creatable;
+    unit.Creatable.TrainLocations.front().LocationID = 87;
+
+    FieldTreeModel model;
+    model.setObject(unitFields(), unit, nullptr, {}, [](RefKind kind, int id) {
+        return kind == RefKind::Unit && id == 87 ? QStringLiteral("Archery Range") : QString();
+    });
+    const QModelIndex location = fieldIndex(model, QStringLiteral("Train location"));
+    QCOMPARE(location.data(FieldTreeModel::RefKindRole).toInt(), static_cast<int>(RefKind::Unit));
+    QCOMPARE(location.data().toString(), QStringLiteral("Archery Range (87)"));
+    QCOMPARE(fieldValue(model, QStringLiteral("Train location")).toInt(), 87);
+
+    // -1 is not a unit, so the number is left as-is.
+    unit.Creatable.TrainLocations.front().LocationID = -1;
+    model.setObject(unitFields(), unit, nullptr, {}, [](RefKind kind, int id) {
+        return kind == RefKind::Unit && id == 87 ? QStringLiteral("Archery Range") : QString();
+    });
+    QCOMPARE(fieldText(model, QStringLiteral("Train location")), QStringLiteral("-1"));
+}
+
 bool ModelTest::openSample(Session &session)
 {
     QString error;
@@ -229,6 +253,15 @@ void ModelTest::sampleUnitValues()
     QCOMPARE(fieldText(fields, QStringLiteral("Class")), QStringLiteral("%1 (%2)").arg(className).arg(archer->Class));
     QCOMPARE(fieldText(fields, QStringLiteral("Cost 1 resource")), QStringLiteral("Wood Storage (1)"));
     QCOMPARE(fieldText(fields, QStringLiteral("Cost 2 resource")), QStringLiteral("Gold Storage (3)"));
+    const int trainAt = archer->Creatable.TrainLocations.front().LocationID;
+    QCOMPARE(fieldValue(fields, QStringLiteral("Train location")).toInt(), trainAt);
+    const genie::Unit *building = units.unit(trainAt);
+    QVERIFY(building);
+    QString trainName = session.names().text(building->LanguageDLLName);
+    if (trainName.isEmpty())
+        trainName = QString::fromLatin1(building->Name);
+    QVERIFY(!trainName.isEmpty());
+    QCOMPARE(fieldText(fields, QStringLiteral("Train location")), QStringLiteral("%1 (%2)").arg(trainName).arg(trainAt));
     QVERIFY(!fieldIndex(fields, QStringLiteral("Cost 3 resource")).isValid());
 
     // Empty slots are listed but can't be selected.
@@ -1059,10 +1092,16 @@ void ModelTest::techIconMarkedForPreview()
     QCOMPARE(fieldIndex(model, QStringLiteral("Effect")).data(FieldTreeModel::SpriteRole).toInt(),
              static_cast<int>(SpriteKind::None));
 
-    // Unit icons are a different sprite. The shared preview must not treat them as tech icons.
+    // Unit icons are a different sprite, so the shared preview can tell them apart.
     genie::Unit unit;
+    unit.IconID = 5;
     model.setObject(unitFields(), unit);
-    QCOMPARE(fieldIndex(model, QStringLiteral("Icon")).data(FieldTreeModel::SpriteRole).toInt(),
+    const QModelIndex unitIcon = fieldIndex(model, QStringLiteral("Icon"));
+    QCOMPARE(unitIcon.data().toString(), QStringLiteral("5"));
+    QCOMPARE(unitIcon.data(FieldTreeModel::SpriteRole).toInt(), static_cast<int>(SpriteKind::UnitIcon));
+    QCOMPARE(unitIcon.siblingAtColumn(FieldTreeModel::NameColumn).data(FieldTreeModel::SpriteRole).toInt(),
+             static_cast<int>(SpriteKind::UnitIcon));
+    QCOMPARE(fieldIndex(model, QStringLiteral("Standing graphic 1")).data(FieldTreeModel::SpriteRole).toInt(),
              static_cast<int>(SpriteKind::None));
 }
 

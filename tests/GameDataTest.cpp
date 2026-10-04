@@ -10,6 +10,7 @@
 #include "core/SpriteLibrary.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "genie/dat/Unit.h"
 
 using namespace newage;
 
@@ -59,6 +60,7 @@ private slots:
     void openDatasetLoadsNames();
     void realInstall();
     void techIconSlpFollowsVersion();
+    void unitIconSlpFollowsVersion();
     void spriteSourceFollowsInstallLayout();
     void missingSpriteFrameIsEmpty();
 };
@@ -294,6 +296,28 @@ void GameDataTest::techIconSlpFollowsVersion()
     QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_CC, 1), 53261);
     QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_CCV, 0), 53260);
     QCOMPARE(SpriteLibrary::techIconSlpId(genie::GV_CCV2, 4), 53364);
+}
+
+void GameDataTest::unitIconSlpFollowsVersion()
+{
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_AoE, 3, genie::UT_Creatable, 4), 50730);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_TC, 2, genie::UT_Building, 3), 50706);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_TC, 9, genie::UT_Building, 51), 50730);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_Cysion, 1, genie::UT_Building, 54), 50730);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_C2, 1, genie::UT_Building, 27), 50705);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_SWGB, 1, genie::UT_Building, 18), 50705);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_SWGB, 2, genie::UT_Building, 34), 50735);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_SWGB, 2, genie::UT_Creatable, 4), 50735);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_SWGB, -1, genie::UT_Building, 36), 50733);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_CC, 1, genie::UT_Building, 18), 53241);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_CC, 1, genie::UT_Building, 34), 53251);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_CCV, 0, genie::UT_Creatable, 0), 53250);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_CCV2, 4, genie::UT_Building, 18), 53304);
+    QCOMPARE(SpriteLibrary::unitIconSlpId(genie::GV_CCV2, 4, genie::UT_Creatable, 0), 53334);
+
+    QCOMPARE(SpriteLibrary::unitIconFrame(18, genie::UT_Creatable, 2), 18);
+    QCOMPARE(SpriteLibrary::unitIconFrame(18, genie::UT_Building, 0), 18);
+    QCOMPARE(SpriteLibrary::unitIconFrame(18, genie::UT_Building, 3), 21);
 }
 
 void GameDataTest::spriteSourceFollowsInstallLayout()

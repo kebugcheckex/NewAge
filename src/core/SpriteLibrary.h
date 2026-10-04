@@ -39,9 +39,8 @@ struct SpriteImage
 };
 
 // Loads interface SLPs and palette 50500 for the open game, and caches frames.
-// Shared so a later unit-icon preview can use the same files. A miss — no
-// install, no palette, frame -1, frame past the end — is a null image, not
-// an error.
+// Shared by the tech- and unit-icon previews. A miss — no install, no palette,
+// frame -1, frame past the end — is a null image, not an error.
 class SpriteLibrary
 {
 public:
@@ -63,6 +62,15 @@ public:
     // SLP resource that holds tech icons. `iconSet` is the selected civ's
     // Civ::IconSet; AoE and AoE2 ignore it. The frame is the tech's IconID.
     static int techIconSlpId(genie::GameVersion version, int iconSet);
+
+    // SLP resource that holds this unit's icon. `type` and `unitClass` are
+    // Unit::Type and Unit::Class: buildings use a different SLP, except packed
+    // and unpacked siege. `iconSet` is the selected civ's Civ::IconSet; AoE and
+    // AoE2 ignore it for non-building icons. The frame is unitIconFrame().
+    static int unitIconSlpId(genie::GameVersion version, int iconSet, int type, int unitClass);
+
+    // Frame of that SLP for IconID `iconId`. Buildings add GraphicsAngle.
+    static int unitIconFrame(int iconId, int type, int graphicsAngle);
 
 private:
     struct Cache;

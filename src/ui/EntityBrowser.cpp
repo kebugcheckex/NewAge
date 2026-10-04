@@ -24,9 +24,11 @@
 #include "core/Session.h"
 #include "core/SpriteLibrary.h"
 #include "genie/dat/DatFile.h"
+#include "genie/dat/Unit.h"
 #include "model/EntityListModel.h"
 #include "model/FieldTreeModel.h"
 #include "model/ListFilterModel.h"
+#include "model/UnitListModel.h"
 
 namespace newage {
 
@@ -103,7 +105,7 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
     fieldView_->viewport()->installEventFilter(this);
 
     iconPopup_ = new QLabel(this);
-    iconPopup_->setObjectName(QStringLiteral("techIconPopup"));
+    iconPopup_->setObjectName(QStringLiteral("iconPopup"));
     iconPopup_->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint);
     iconPopup_->setAttribute(Qt::WA_ShowWithoutActivating);
     iconPopup_->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -161,7 +163,7 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
             fieldView_->edit(value);
     });
     connect(fieldModel_, &QAbstractItemModel::modelReset, this, [this] {
-        hideTechIcon();
+        hideIcon();
         // Group headings span both columns so they read as section titles.
         for (int row = 0; row < fieldModel_->rowCount(); ++row)
             fieldView_->setFirstColumnSpanned(row, {}, true);
@@ -169,21 +171,21 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
     });
     connect(fieldView_->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this](const QModelIndex &current) {
-                if (!isTechIconRow(current))
+                if (!isIconRow(current))
                 {
-                    hideTechIcon();
+                    hideIcon();
                     return;
                 }
-                showTechIcon(current, techIconAnchor(current));
+                showIcon(current, iconAnchor(current));
             });
     const auto followScroll = [this] {
         const QModelIndex current = fieldView_->currentIndex();
-        if (!isTechIconRow(current))
+        if (!isIconRow(current))
         {
-            hideTechIcon();
+            hideIcon();
             return;
         }
-        showTechIcon(current, techIconAnchor(current));
+        showIcon(current, iconAnchor(current));
     };
     connect(fieldView_->verticalScrollBar(), &QAbstractSlider::valueChanged, this, followScroll);
     connect(fieldView_->horizontalScrollBar(), &QAbstractSlider::valueChanged, this, followScroll);
@@ -252,15 +254,17 @@ void EntityBrowser::applyConfig()
         listView_->scrollTo(listView_->currentIndex());
 }
 
-bool EntityBrowser::isTechIconRow(const QModelIndex &index) const
+bool EntityBrowser::isIconRow(const QModelIndex &index) const
 {
-    return index.isValid() && index.parent().isValid()
-           && index.data(FieldTreeModel::SpriteRole).toInt() == static_cast<int>(SpriteKind::TechIcon);
+    if (!index.isValid() || !index.parent().isValid())
+        return false;
+    const auto kind = static_cast<SpriteKind>(index.data(FieldTreeModel::SpriteRole).toInt());
+    return kind == SpriteKind::TechIcon || kind == SpriteKind::UnitIcon;
 }
 
-QImage EntityBrowser::techIconImage(const QModelIndex &index) const
+QImage EntityBrowser::iconImage(const QModelIndex &index) const
 {
-    if (!session_->isOpen() || !isTechIconRow(index))
+    if (!session_->isOpen() || !isIconRow(index))
         return {};
     const int iconId = index.siblingAtColumn(FieldTreeModel::ValueColumn).data(FieldTreeModel::ValueRole).toInt();
     if (iconId < 0)
@@ -272,7 +276,22 @@ QImage EntityBrowser::techIconImage(const QModelIndex &index) const
     if (civ >= 0 && civ < static_cast<int>(civs.size()))
         iconSet = civs[static_cast<size_t>(civ)].IconSet;
 
-    const SpriteImage sprite = session_->sprites().frame(SpriteLibrary::techIconSlpId(session_->gameVersion(), iconSet), iconId);
+    const auto kind = static_cast<SpriteKind>(index.data(FieldTreeModel::SpriteRole).toInt());
+    int slpId = SpriteLibrary::techIconSlpId(session_->gameVersion(), iconSet);
+    int frameId = iconId;
+    if (kind == SpriteKind::UnitIcon)
+    {
+        const auto *units = qobject_cast<const UnitListModel *>(listModel_);
+        const genie::Unit *unit = units ? units->unit(selectedRow()) : nullptr;
+        if (!unit)
+            return {};
+        slpId = SpriteLibrary::unitIconSlpId(session_->gameVersion(), iconSet, unit->Type, unit->Class);
+        frameId = SpriteLibrary::unitIconFrame(iconId, unit->Type, unit->Building.GraphicsAngle);
+        if (frameId < 0)
+            return {};
+    }
+
+    const SpriteImage sprite = session_->sprites().frame(slpId, frameId);
     if (sprite.isNull())
         return {};
     // copy() detaches from the buffer SpriteImage is about to leave.
@@ -281,7 +300,7 @@ QImage EntityBrowser::techIconImage(const QModelIndex &index) const
         .copy();
 }
 
-QPoint EntityBrowser::techIconAnchor(const QModelIndex &index) const
+QPoint EntityBrowser::iconAnchor(const QModelIndex &index) const
 {
     const QModelIndex value = index.siblingAtColumn(FieldTreeModel::ValueColumn);
     const QRect rect = fieldView_->visualRect(value);
@@ -290,17 +309,17 @@ QPoint EntityBrowser::techIconAnchor(const QModelIndex &index) const
     return fieldView_->viewport()->mapToGlobal(rect.topRight() + QPoint(8, 0));
 }
 
-void EntityBrowser::showTechIcon(const QModelIndex &index, const QPoint &globalPos)
+void EntityBrowser::showIcon(const QModelIndex &index, const QPoint &globalPos)
 {
     if (globalPos.isNull())
     {
-        hideTechIcon();
+        hideIcon();
         return;
     }
-    QImage image = techIconImage(index);
+    QImage image = iconImage(index);
     if (image.isNull())
     {
-        hideTechIcon();
+        hideIcon();
         return;
     }
 
@@ -333,7 +352,7 @@ void EntityBrowser::showTechIcon(const QModelIndex &index, const QPoint &globalP
     iconPopup_->show();
 }
 
-void EntityBrowser::hideTechIcon()
+void EntityBrowser::hideIcon()
 {
     if (iconPopup_)
         iconPopup_->hide();
@@ -347,25 +366,26 @@ bool EntityBrowser::eventFilter(QObject *watched, QEvent *event)
         {
             const auto *help = static_cast<const QHelpEvent *>(event);
             const QModelIndex index = fieldView_->indexAt(help->pos());
-            if (isTechIconRow(index))
+            if (isIconRow(index))
             {
-                showTechIcon(index, help->globalPos() + QPoint(16, 16));
+                // Pin beside the cell. A cursor offset jumps on every tooltip event.
+                showIcon(index, iconAnchor(index));
                 return true;
             }
-            // Moving off the icon row: keep a keyboard preview beside the cell,
-            // otherwise drop the hover preview.
-            if (isTechIconRow(fieldView_->currentIndex()))
-                showTechIcon(fieldView_->currentIndex(), techIconAnchor(fieldView_->currentIndex()));
+            // Moving off the icon row: keep a preview beside the selected cell,
+            // otherwise drop it.
+            if (isIconRow(fieldView_->currentIndex()))
+                showIcon(fieldView_->currentIndex(), iconAnchor(fieldView_->currentIndex()));
             else
-                hideTechIcon();
+                hideIcon();
         }
         else if (event->type() == QEvent::Leave)
         {
             const QModelIndex current = fieldView_->currentIndex();
-            if (isTechIconRow(current))
-                showTechIcon(current, techIconAnchor(current));
+            if (isIconRow(current))
+                showIcon(current, iconAnchor(current));
             else
-                hideTechIcon();
+                hideIcon();
         }
     }
     return QWidget::eventFilter(watched, event);
@@ -373,14 +393,14 @@ bool EntityBrowser::eventFilter(QObject *watched, QEvent *event)
 
 void EntityBrowser::hideEvent(QHideEvent *event)
 {
-    hideTechIcon();
+    hideIcon();
     QWidget::hideEvent(event);
 }
 
 void EntityBrowser::changeEvent(QEvent *event)
 {
     if (event->type() == QEvent::ActivationChange && !isActiveWindow())
-        hideTechIcon();
+        hideIcon();
     QWidget::changeEvent(event);
 }
 

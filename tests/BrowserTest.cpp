@@ -147,6 +147,8 @@ void BrowserTest::browseSampleUnits()
 
     selectId(units, 4);
     QCOMPARE(shownValue(fields, QStringLiteral("Internal name")), QStringLiteral("ARCHR"));
+    QCOMPARE(valueIndex(fields, QStringLiteral("Icon")).data(FieldTreeModel::SpriteRole).toInt(),
+             static_cast<int>(SpriteKind::UnitIcon));
     QCOMPARE(shownValue(fields, QStringLiteral("Hit points")), QStringLiteral("30"));
     QCOMPARE(shownValue(fields, QStringLiteral("Speed")), QStringLiteral("0.96"));
     QVERIFY(fields->isExpanded(fields->model()->index(0, 0)));

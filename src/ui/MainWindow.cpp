@@ -52,7 +52,6 @@ MainWindow::MainWindow(Config *config, QWidget *parent)
 {
     placeholder_->setAlignment(Qt::AlignCenter);
     pages_->addWidget(placeholder_);
-    browsers_->setDocumentMode(true);
     browsers_->addTab(new EntityBrowser(session_, config_, new UnitListModel(session_), &Config::hideEmptyUnits,
                                         tr("Filter units")),
                       tr("&Units"));
