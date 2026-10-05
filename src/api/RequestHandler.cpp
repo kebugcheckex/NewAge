@@ -1,8 +1,10 @@
 #include "api/RequestHandler.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 #include <QDir>
 #include <QFileInfo>
@@ -64,7 +66,7 @@ HandlerResult usage(const QString &message)
     return failed(makeError(QStringLiteral("usage"), message));
 }
 
-HandlerResult succeeded(const QJsonObject &body, const QStringList &warnings)
+HandlerResult succeeded(const QJsonObject &body, const QStringList &warnings = {})
 {
     HandlerResult result;
     result.body = body;
@@ -320,31 +322,22 @@ QJsonObject getObject(const GetQuery &query, bool compact, const GetResult &get)
     return body;
 }
 
-} // namespace
-
-int exitCodeFor(const QString &code)
+// A read request that passed the checks that need no data.
+struct Prepared
 {
-    if (code.isEmpty())
-        return 0;
-    if (code == QStringLiteral("usage"))
-        return 1;
-    if (code == QStringLiteral("load_failed") || code == QStringLiteral("no_dataset")
-        || code == QStringLiteral("mod_not_found") || code == QStringLiteral("mods_unsupported"))
-        return 2;
-    if (code == QStringLiteral("unknown_kind") || code == QStringLiteral("unknown_entity")
-        || code == QStringLiteral("inactive_entity") || code == QStringLiteral("unknown_field")
-        || code == QStringLiteral("not_applicable") || code == QStringLiteral("read_only")
-        || code == QStringLiteral("bad_value") || code == QStringLiteral("out_of_range"))
-        return 3;
-    if (code == QStringLiteral("conflict"))
-        return 4;
-    if (code == QStringLiteral("mod_required") || code == QStringLiteral("game_data_protected")
-        || code == QStringLiteral("save_failed"))
-        return 5;
-    return 1;
-}
+    QString op;
+    QString schemaKind;
+    QString table;
+    QString text;
+    int civ = -1;
+    ListQuery listQuery;
+    GetQuery getQuery;
+    bool compact = false;
+};
 
-HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject &request)
+// Checks `request` before any data is opened, so a malformed one fails fast.
+// Returns the failure, or nothing when `out` is ready to run.
+std::optional<HandlerResult> prepare(const QJsonObject &request, Prepared &out)
 {
     const QJsonValue opValue = request.value(QStringLiteral("op"));
     if (!opValue.isString() || opValue.toString().isEmpty())
@@ -353,34 +346,31 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
     if (op != QStringLiteral("info") && op != QStringLiteral("schema") && op != QStringLiteral("lookup")
         && op != QStringLiteral("list") && op != QStringLiteral("get"))
         return usage(QStringLiteral("Unknown op \"%1\".").arg(op));
+    out.op = op;
 
-    // Check the request before opening, so a malformed one fails fast.
-    QString schemaKind;
     if (op == QStringLiteral("schema"))
     {
         const QJsonValue kindValue = request.value(QStringLiteral("kind"));
         if (!kindValue.isUndefined() && !kindValue.isString())
             return usage(QStringLiteral("schema kind must be a string."));
-        schemaKind = kindValue.toString();
-        if (!schemaKind.isEmpty() && !findEntityKind(schemaKind))
-            return failed(unknownKind(schemaKind, QStringLiteral("Unknown kind \"%1\".").arg(schemaKind)));
+        out.schemaKind = kindValue.toString();
+        if (!out.schemaKind.isEmpty() && !findEntityKind(out.schemaKind))
+            return failed(unknownKind(out.schemaKind, QStringLiteral("Unknown kind \"%1\".").arg(out.schemaKind)));
     }
 
-    QString table;
-    QString text;
-    int civ = -1;
     if (op == QStringLiteral("lookup"))
     {
         const QJsonValue tableValue = request.value(QStringLiteral("table"));
         if (!tableValue.isString() || tableValue.toString().isEmpty())
             return usage(QStringLiteral("lookup needs a table."));
-        table = tableValue.toString();
+        const QString table = tableValue.toString();
+        out.table = table;
         if (!lookupTables().contains(table))
             return failed(unknownKind(table, QStringLiteral("Unknown lookup table \"%1\".").arg(table)));
         const QJsonValue textValue = request.value(QStringLiteral("text"));
         if (!textValue.isUndefined() && !textValue.isString())
             return usage(QStringLiteral("lookup text must be a string."));
-        text = textValue.toString().trimmed();
+        out.text = textValue.toString().trimmed();
         const EntityKind *kind = findEntityKind(table);
         const bool perCiv = kind && kind->perCiv();
         const QJsonValue civValue = request.value(QStringLiteral("civ"));
@@ -393,14 +383,14 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
         {
             if (!perCiv)
                 return usage(QStringLiteral("lookup %1 takes no civ.").arg(table));
-            if (!readInt(civValue, civ))
+            if (!readInt(civValue, out.civ))
                 return usage(QStringLiteral("civ must be an integer."));
         }
     }
 
-    ListQuery listQuery;
     if (op == QStringLiteral("list"))
     {
+        ListQuery &listQuery = out.listQuery;
         const QJsonValue kindValue = request.value(QStringLiteral("kind"));
         if (!kindValue.isString() || kindValue.toString().isEmpty())
             return usage(QStringLiteral("list needs a kind."));
@@ -436,10 +426,9 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
             return usage(QStringLiteral("limit must be a non-negative integer."));
     }
 
-    GetQuery getQuery;
-    bool compact = false;
     if (op == QStringLiteral("get"))
     {
+        GetQuery &getQuery = out.getQuery;
         const QJsonValue kindValue = request.value(QStringLiteral("kind"));
         if (!kindValue.isString() || kindValue.toString().isEmpty())
             return usage(QStringLiteral("get needs a kind."));
@@ -477,45 +466,152 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
         const QJsonValue compactValue = request.value(QStringLiteral("compact"));
         if (!compactValue.isUndefined() && !compactValue.isBool())
             return usage(QStringLiteral("compact must be true or false."));
-        compact = compactValue.toBool();
+        out.compact = compactValue.toBool();
     }
 
-    const DataSource resolved = resolveSource(source);
-    DataService service;
-    const OpenResult opened = service.open(resolved);
-    if (!opened.ok)
-        return failed(opened.error, opened.warnings);
+    return std::nullopt;
+}
+
+// Runs a prepared request against open data. `source` is the resolved
+// source, which info reports. Open warnings are the caller's to attach.
+HandlerResult run(const Prepared &prepared, const DataService &service, const DataSource &source)
+{
+    const QString &op = prepared.op;
     if (op == QStringLiteral("info"))
-        return succeeded(infoObject(service, resolved), opened.warnings);
+        return succeeded(infoObject(service, source));
     if (op == QStringLiteral("lookup"))
     {
-        const LookupResult lookup = service.lookup(table, text, civ);
+        const LookupResult lookup = service.lookup(prepared.table, prepared.text, prepared.civ);
         if (!lookup.ok)
-            return failed(lookup.error, opened.warnings);
-        return succeeded(lookupObject(table, text, civ, lookup), opened.warnings);
+            return failed(lookup.error);
+        return succeeded(lookupObject(prepared.table, prepared.text, prepared.civ, lookup));
     }
     if (op == QStringLiteral("list"))
     {
-        const ListResult list = service.list(listQuery);
+        const ListResult list = service.list(prepared.listQuery);
         if (!list.ok)
-            return failed(list.error, opened.warnings);
-        return succeeded(listObject(listQuery, list), opened.warnings);
+            return failed(list.error);
+        return succeeded(listObject(prepared.listQuery, list));
     }
     if (op == QStringLiteral("get"))
     {
-        const GetResult get = service.get(getQuery);
+        const GetResult get = service.get(prepared.getQuery);
         if (!get.ok)
-            return failed(get.error, opened.warnings);
-        return succeeded(getObject(getQuery, compact, get), opened.warnings);
+            return failed(get.error);
+        return succeeded(getObject(prepared.getQuery, prepared.compact, get));
     }
-    if (!schemaKind.isEmpty())
-        return succeeded(schemaObject(*service.kind(schemaKind), service.session()), opened.warnings);
+    if (!prepared.schemaKind.isEmpty())
+        return succeeded(schemaObject(*service.kind(prepared.schemaKind), service.session()));
     QJsonArray kinds;
     for (const EntityKind *kind : service.kinds())
         kinds.append(schemaObject(*kind, service.session()));
     QJsonObject body;
     body.insert(QStringLiteral("kinds"), kinds);
-    return succeeded(body, opened.warnings);
+    return succeeded(body);
+}
+
+// One open for every request that passes prepare(). Each result takes its
+// request's place; a request that fails leaves the others running. The data
+// is not opened when no request passes.
+HandlerResult handleBatch(const DataSource &source, const QJsonObject &request)
+{
+    const QJsonValue requestsValue = request.value(QStringLiteral("requests"));
+    if (!requestsValue.isArray() || requestsValue.toArray().isEmpty())
+        return usage(QStringLiteral("batch needs a non-empty requests array."));
+    const QJsonArray requests = requestsValue.toArray();
+
+    QList<std::optional<Prepared>> prepared(requests.size());
+    QList<HandlerResult> results(requests.size());
+    for (qsizetype i = 0; i < requests.size(); ++i)
+    {
+        const QJsonValue value = requests.at(i);
+        if (!value.isObject())
+        {
+            results[i] = usage(QStringLiteral("Batch request %1 is not an object.").arg(i));
+            continue;
+        }
+        if (value.toObject().value(QStringLiteral("op")) == QStringLiteral("batch"))
+        {
+            results[i] = usage(QStringLiteral("A batch cannot contain a batch."));
+            continue;
+        }
+        Prepared ready;
+        if (const std::optional<HandlerResult> bad = prepare(value.toObject(), ready))
+            results[i] = *bad;
+        else
+            prepared[i] = ready;
+    }
+
+    QStringList warnings;
+    if (std::any_of(prepared.cbegin(), prepared.cend(), [](const auto &ready) { return ready.has_value(); }))
+    {
+        const DataSource resolved = resolveSource(source);
+        DataService service;
+        const OpenResult opened = service.open(resolved);
+        if (!opened.ok)
+            return failed(opened.error, opened.warnings);
+        warnings = opened.warnings;
+        for (qsizetype i = 0; i < prepared.size(); ++i)
+        {
+            if (prepared[i])
+                results[i] = run(*prepared[i], service, resolved);
+        }
+    }
+
+    QJsonArray bodies;
+    int failures = 0;
+    for (const HandlerResult &result : results)
+    {
+        bodies.append(result.body);
+        if (result.exitCode != 0)
+            ++failures;
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("results"), bodies);
+    body.insert(QStringLiteral("failed"), failures);
+    return succeeded(body, warnings);
+}
+
+} // namespace
+
+int exitCodeFor(const QString &code)
+{
+    if (code.isEmpty())
+        return 0;
+    if (code == QStringLiteral("usage"))
+        return 1;
+    if (code == QStringLiteral("load_failed") || code == QStringLiteral("no_dataset")
+        || code == QStringLiteral("mod_not_found") || code == QStringLiteral("mods_unsupported"))
+        return 2;
+    if (code == QStringLiteral("unknown_kind") || code == QStringLiteral("unknown_entity")
+        || code == QStringLiteral("inactive_entity") || code == QStringLiteral("unknown_field")
+        || code == QStringLiteral("not_applicable") || code == QStringLiteral("read_only")
+        || code == QStringLiteral("bad_value") || code == QStringLiteral("out_of_range"))
+        return 3;
+    if (code == QStringLiteral("conflict"))
+        return 4;
+    if (code == QStringLiteral("mod_required") || code == QStringLiteral("game_data_protected")
+        || code == QStringLiteral("save_failed"))
+        return 5;
+    return 1;
+}
+
+HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject &request)
+{
+    if (request.value(QStringLiteral("op")) == QStringLiteral("batch"))
+        return handleBatch(source, request);
+
+    Prepared prepared;
+    if (const std::optional<HandlerResult> bad = prepare(request, prepared))
+        return *bad;
+    const DataSource resolved = resolveSource(source);
+    DataService service;
+    const OpenResult opened = service.open(resolved);
+    if (!opened.ok)
+        return failed(opened.error, opened.warnings);
+    HandlerResult result = run(prepared, service, resolved);
+    result.warnings = opened.warnings;
+    return result;
 }
 
 } // namespace newage

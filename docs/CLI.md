@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list` and `get` with shared source options; `cli_test` and `cli_process_test` check their JSON output. `batch` and `mods list` are not built yet.
+Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get` and `batch` with shared source options; `cli_test` and `cli_process_test` check their JSON output. `mods list` is not built yet.
 
 ## 1. Goal
 
@@ -260,7 +260,7 @@ A result's `changes` list converts directly back into a patch (`old` as `expect`
 
 ### 6.4 `batch`
 
-`batch` reads a JSON array of read requests (`info`, `schema`, `lookup`, `list`, `get`) from a file or stdin, loads the data once, and returns an array of results in the same order. A failed request returns its error in place; the others still run. Writes stay in `set` and `apply`, so a batch can never save by accident.
+`batch` reads a JSON array of read requests (`info`, `schema`, `lookup`, `list`, `get`) from a file or stdin (`-`), loads the data once, and returns the results in the same order. A failed request returns its error in place; the others still run. Writes stay in `set` and `apply`, so a batch can never save by accident.
 
 ```json
 [
@@ -268,6 +268,22 @@ A result's `changes` list converts directly back into a patch (`old` as `expect`
   {"op": "get", "kind": "tech", "ids": [440, 441], "fields": ["cost*", "research_time"]}
 ]
 ```
+
+```json
+{
+  "results": [
+    {"table": "civ", "query": "spanish", "matches": [...]},
+    {"error": {"code": "unknown_entity", "message": "No tech 441.", "kind": "tech", "id": 441}}
+  ],
+  "failed": 1
+}
+```
+
+- The output is an object, like every other command's, so a top-level `error` always means the batch as a whole failed. Each entry of `results` is exactly what the request prints on its own: its result, or `{"error": ...}`. `failed` counts the entries that are errors.
+- The exit status is 0 when the batch ran, whatever its entries did; check `failed`. The batch as a whole fails with `usage` (exit 1) when the input can't be read, isn't JSON, or isn't a non-empty array, and with the open error (exit 2) when the data can't be loaded.
+- Source options (`--game`, `--mod`, `--dat`, ...) apply to the whole batch. Per-request options such as `civ` go inside each request; `--civ` and the other command options are rejected on `batch`.
+- Requests are checked before the data is opened. A request that isn't an object, has an unknown op, or is itself a `batch` is `usage` in its place. When no request passes those checks, the data isn't opened.
+- As a handler request (for a future `serve` mode): `{"op": "batch", "requests": [...]}`.
 
 ## 7. Civs and units
 

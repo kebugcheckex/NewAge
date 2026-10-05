@@ -4,6 +4,7 @@
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -38,6 +39,41 @@ int usage(const QString &message)
     body.insert(QStringLiteral("error"), error);
     printJson(stdout, body);
     return newage::exitCodeFor(QStringLiteral("usage"));
+}
+
+// Reads the batch requests from `path`, or stdin for "-". Empty and sets
+// `problem` when the input can't be read or isn't a JSON array.
+QJsonArray readBatch(const QString &path, QString &problem)
+{
+    QFile file;
+    bool opened = false;
+    if (path == QStringLiteral("-"))
+    {
+        opened = file.open(stdin, QIODevice::ReadOnly);
+    }
+    else
+    {
+        file.setFileName(path);
+        opened = file.open(QIODevice::ReadOnly);
+    }
+    if (!opened)
+    {
+        problem = QStringLiteral("Cannot read batch file \"%1\": %2").arg(path, file.errorString());
+        return {};
+    }
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+    if (error.error != QJsonParseError::NoError)
+    {
+        problem = QStringLiteral("Batch input is not JSON: %1 at offset %2.").arg(error.errorString()).arg(error.offset);
+        return {};
+    }
+    if (!document.isArray())
+    {
+        problem = QStringLiteral("Batch input must be a JSON array of requests.");
+        return {};
+    }
+    return document.array();
 }
 
 void printMessage(const QString &kind, const QString &message)
@@ -140,10 +176,15 @@ int main(int argc, char *argv[])
         if (positional.size() < 3)
             return usage(QStringLiteral("Expected get <kind> <id>..."));
     }
+    else if (command == QStringLiteral("batch"))
+    {
+        if (positional.size() != 2)
+            return usage(QStringLiteral("Expected batch FILE|-."));
+    }
     else
     {
-        return usage(
-            QStringLiteral("Expected info, schema [kind], lookup <table> [TEXT], list <kind> or get <kind> <id>..."));
+        return usage(QStringLiteral("Expected info, schema [kind], lookup <table> [TEXT], list <kind>, "
+                                    "get <kind> <id>... or batch FILE|-."));
     }
     const bool lists = command == QStringLiteral("list");
     const bool gets = command == QStringLiteral("get");
@@ -212,6 +253,14 @@ int main(int argc, char *argv[])
         }
         if (parser.isSet(compact))
             request.insert(QStringLiteral("compact"), true);
+    }
+    if (command == QStringLiteral("batch"))
+    {
+        QString problem;
+        const QJsonArray requests = readBatch(positional.at(1), problem);
+        if (!problem.isEmpty())
+            return usage(problem);
+        request.insert(QStringLiteral("requests"), requests);
     }
     if (parser.isSet(civ) && !insertInt(request, QStringLiteral("civ"), parser.value(civ)))
         return usage(QStringLiteral("--civ needs an integer."));

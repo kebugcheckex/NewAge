@@ -105,6 +105,18 @@ QString errorCode(const HandlerResult &result)
     return result.body.value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString();
 }
 
+QJsonObject batch(const QJsonArray &requests)
+{
+    QJsonObject request = op(QStringLiteral("batch"));
+    request.insert(QStringLiteral("requests"), requests);
+    return request;
+}
+
+QString errorCode(const QJsonValue &body)
+{
+    return body.toObject().value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString();
+}
+
 } // namespace
 
 class CliTest : public QObject
@@ -147,6 +159,11 @@ private slots:
     void getFieldPatterns();
     void getCompact();
     void getTechActivityAndLabels();
+    void batchNeedsRequests_data();
+    void batchNeedsRequests();
+    void batchChecksRequestsBeforeOpen();
+    void batchOpenFailureFailsWhole();
+    void batchRunsEachRequestInPlace();
 };
 
 void CliTest::init()
@@ -1074,6 +1091,93 @@ void CliTest::getTechActivityAndLabels()
     const QJsonArray items = result.body.value(QStringLiteral("items")).toArray();
     QCOMPARE(items.at(0).toObject().value(QStringLiteral("active")).toBool(), true);
     QCOMPARE(items.at(1).toObject().value(QStringLiteral("active")).toBool(), false);
+}
+
+void CliTest::batchNeedsRequests_data()
+{
+    QTest::addColumn<QJsonObject>("request");
+    QJsonObject notArray = op(QStringLiteral("batch"));
+    notArray.insert(QStringLiteral("requests"), op(QStringLiteral("info")));
+    QTest::newRow("missing") << op(QStringLiteral("batch"));
+    QTest::newRow("not an array") << notArray;
+    QTest::newRow("empty") << batch({});
+}
+
+void CliTest::batchNeedsRequests()
+{
+    QFETCH(QJsonObject, request);
+    const HandlerResult result = RequestHandler().handle(tcSource(), request);
+    QCOMPARE(result.exitCode, 1);
+    QCOMPARE(errorCode(result), QStringLiteral("usage"));
+    QVERIFY(!result.body.contains(QStringLiteral("results")));
+}
+
+// Malformed requests fail in place. When none is left to run, the data isn't
+// opened: a missing file would otherwise fail the whole batch.
+void CliTest::batchChecksRequestsBeforeOpen()
+{
+    DataSource source;
+    source.datPath = QStringLiteral("missing.dat");
+    source.versionKey = QStringLiteral("tc");
+    QJsonObject noIds = op(QStringLiteral("get"));
+    noIds.insert(QStringLiteral("kind"), QStringLiteral("unit"));
+    const HandlerResult result = RequestHandler().handle(
+        source, batch({42, batch({op(QStringLiteral("info"))}), op(QStringLiteral("set")), noIds,
+                       lookup(QStringLiteral("bogus"))}));
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("failed")).toInt(), 5);
+    const QJsonArray results = result.body.value(QStringLiteral("results")).toArray();
+    QCOMPARE(results.size(), 5);
+    for (int i = 0; i < 4; ++i)
+        QCOMPARE(errorCode(results.at(i)), QStringLiteral("usage"));
+    QCOMPARE(errorCode(results.at(4)), QStringLiteral("unknown_kind"));
+    QVERIFY(results.at(0).toObject().value(QStringLiteral("error")).toObject().value(QStringLiteral("message"))
+                .toString()
+                .contains(QStringLiteral("0")));
+}
+
+void CliTest::batchOpenFailureFailsWhole()
+{
+    const HandlerResult result =
+        RequestHandler().handle({}, batch({op(QStringLiteral("info")), op(QStringLiteral("set"))}));
+    QCOMPARE(result.exitCode, 2);
+    QCOMPARE(errorCode(result), QStringLiteral("no_dataset"));
+    QVERIFY(!result.body.contains(QStringLiteral("results")));
+}
+
+// Each result is what the request returns on its own, failures included.
+void CliTest::batchRunsEachRequestInPlace()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+
+    QJsonObject listEffects = list(QStringLiteral("effect"));
+    listEffects.insert(QStringLiteral("limit"), 2);
+    QJsonObject techs = get(QStringLiteral("tech"), {3, 2});
+    techs.insert(QStringLiteral("fields"), QJsonArray({QStringLiteral("research_time")}));
+    QJsonObject schema = op(QStringLiteral("schema"));
+    schema.insert(QStringLiteral("kind"), QStringLiteral("tech"));
+    const QJsonArray requests = {op(QStringLiteral("info")),
+                                 lookup(QStringLiteral("civ"), QStringLiteral("brit")),
+                                 get(QStringLiteral("unit"), {4}),
+                                 techs,
+                                 get(QStringLiteral("tech"), {-1}),
+                                 listEffects,
+                                 schema};
+
+    const HandlerResult result = RequestHandler().handle(tcSource(), batch(requests));
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("failed")).toInt(), 2);
+    const QJsonArray results = result.body.value(QStringLiteral("results")).toArray();
+    QCOMPARE(results.size(), requests.size());
+    for (qsizetype i = 0; i < requests.size(); ++i)
+    {
+        const HandlerResult alone = RequestHandler().handle(tcSource(), requests.at(i).toObject());
+        QVERIFY2(results.at(i).toObject() == alone.body, qPrintable(QString::number(i)));
+    }
+    QCOMPARE(errorCode(results.at(2)), QStringLiteral("usage"));
+    QCOMPARE(errorCode(results.at(4)), QStringLiteral("unknown_entity"));
+    QCOMPARE(results.at(3).toObject().value(QStringLiteral("items")).toArray().size(), 2);
 }
 
 QTEST_GUILESS_MAIN(CliTest)

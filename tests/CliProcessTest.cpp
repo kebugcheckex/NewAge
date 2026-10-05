@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QTemporaryDir>
 #include <QTest>
 
 namespace {
@@ -17,7 +18,8 @@ struct Response
     QByteArray error;
 };
 
-Response run(const QStringList &arguments)
+// `input`, when given, is written to the CLI's stdin.
+Response run(const QStringList &arguments, const QByteArray &input = {})
 {
     QProcess process;
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
@@ -26,7 +28,11 @@ Response run(const QStringList &arguments)
         environment.remove(name);
     process.setProcessEnvironment(environment);
     process.start(QStringLiteral(NEWAGE_CLI_PATH), arguments);
-    if (!process.waitForStarted() || !process.waitForFinished(120000))
+    if (!process.waitForStarted())
+        return {};
+    process.write(input);
+    process.closeWriteChannel();
+    if (!process.waitForFinished(120000))
         return {};
 
     Response response;
@@ -63,6 +69,8 @@ private slots:
     void listReadsLooseFile();
     void getOptionsOnlyWithGet();
     void getReadsLooseFile();
+    void batchRejectsBadInput();
+    void batchReadsFileAndStdin();
 };
 
 void CliProcessTest::missingCommandIsJsonUsage()
@@ -228,6 +236,64 @@ void CliProcessTest::getReadsLooseFile()
     const QJsonObject fields = techs.at(0).toObject().value(QStringLiteral("fields")).toObject();
     QCOMPARE(fields.keys(), QStringList({QStringLiteral("research_time")}));
     QVERIFY(fields.value(QStringLiteral("research_time")).isDouble());
+}
+
+void CliProcessTest::batchRejectsBadInput()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString notJson = dir.filePath(QStringLiteral("bad.json"));
+    QFile file(notJson);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("[{\"op\": ");
+    file.close();
+
+    const QList<Response> responses = {
+        run({QStringLiteral("batch")}),
+        run({QStringLiteral("batch"), dir.filePath(QStringLiteral("missing.json"))}),
+        run({QStringLiteral("batch"), notJson}),
+        run({QStringLiteral("batch"), QStringLiteral("-")}, R"({"op": "info"})"),
+        run({QStringLiteral("batch"), QStringLiteral("-"), QStringLiteral("--civ"), QStringLiteral("1")}, "[]"),
+    };
+    for (const Response &response : responses)
+    {
+        QCOMPARE(response.exitCode, 1);
+        QCOMPARE(errorCode(response), QStringLiteral("usage"));
+    }
+}
+
+void CliProcessTest::batchReadsFileAndStdin()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    const QByteArray requests = R"([
+        {"op": "lookup", "table": "civ", "text": "brit"},
+        {"op": "get", "kind": "tech", "ids": [3, 2], "fields": ["research_time"], "compact": true},
+        {"op": "get", "kind": "unit", "ids": [4]}
+    ])";
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("requests.json"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(requests);
+    file.close();
+
+    const QStringList source = {QStringLiteral("--dat"), kTcDat, QStringLiteral("--version"), QStringLiteral("tc")};
+    const Response fromFile = run(source + QStringList{QStringLiteral("batch"), path});
+    const Response fromStdin = run(source + QStringList{QStringLiteral("batch"), QStringLiteral("-")}, requests);
+    for (const Response &response : {fromFile, fromStdin})
+    {
+        QCOMPARE(response.exitCode, 0);
+        QCOMPARE(response.body.value(QStringLiteral("failed")).toInt(), 1);
+        const QJsonArray results = response.body.value(QStringLiteral("results")).toArray();
+        QCOMPARE(results.size(), 3);
+        QCOMPARE(results.at(0).toObject().value(QStringLiteral("table")).toString(), QStringLiteral("civ"));
+        QCOMPARE(results.at(1).toObject().value(QStringLiteral("items")).toArray().size(), 2);
+        QCOMPARE(results.at(2).toObject().value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString(),
+                 QStringLiteral("usage"));
+    }
+    QCOMPARE(fromFile.body, fromStdin.body);
 }
 
 QTEST_GUILESS_MAIN(CliProcessTest)
