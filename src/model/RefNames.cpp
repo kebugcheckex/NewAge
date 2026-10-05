@@ -2,6 +2,7 @@
 
 #include "core/Session.h"
 #include "genie/dat/DatFile.h"
+#include "model/EffectFields.h"
 #include "model/EffectNames.h"
 #include "model/ResourceNames.h"
 #include "model/TechFields.h"
@@ -73,6 +74,8 @@ QString refName(const Session &session, RefKind kind, int id, int civ)
         return unitTypeName(id);
     case RefKind::TechType:
         return techTypeName(id);
+    case RefKind::EffectType:
+        return effectTypeName(session.gameVersion(), id);
     }
     return {};
 }
@@ -98,6 +101,9 @@ QList<int> fixedRefIds(genie::GameVersion version, RefKind kind)
         break;
     case RefKind::TechType:
         ids = techTypeIds();
+        break;
+    case RefKind::EffectType:
+        ids = effectTypeIds(version);
         break;
     case RefKind::None:
     case RefKind::Tech:

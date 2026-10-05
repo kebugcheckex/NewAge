@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list` and `get` with shared source options; `cli_test` and `cli_process_test` check their JSON output. `batch` and `mods list` are not built yet.
+Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list` and `get` with shared source options; `cli_test` and `cli_process_test` check their JSON output. `batch` and `mods list` are not built yet.
 
 ## 1. Goal
 

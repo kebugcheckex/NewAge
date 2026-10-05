@@ -172,10 +172,10 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
 {
     const QString group = QStringLiteral("Command %1").arg(command + 1);
     list.append({commandKey(command, QStringLiteral("type")), QStringLiteral("Type"), group, {},
-                 [command, version](const EffectRef &effect) {
-                     return QVariant(effectTypeName(version, effect.effect.EffectCommands.at(command).Type));
+                 [command](const EffectRef &effect) {
+                     return intValue(effect.effect.EffectCommands.at(command).Type);
                  }});
-    list.last().typeId = QMetaType::QString;
+    list.last().ref = RefKind::EffectType;
 
     if (!effectTypeKnown(version, type))
     {
@@ -255,8 +255,8 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
 QString effectTypeName(genie::GameVersion version, int type)
 {
     if (!effectTypeKnown(version, type))
-        return QStringLiteral("%1 - Unknown").arg(type);
-    return QStringLiteral("%1 - %2%3").arg(type).arg(scopePrefix(type), baseName(commandBase(type)));
+        return QStringLiteral("Unknown");
+    return scopePrefix(type) + baseName(commandBase(type));
 }
 
 QList<int> effectTypeIds(genie::GameVersion version)

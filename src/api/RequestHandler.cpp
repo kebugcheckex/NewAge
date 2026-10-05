@@ -122,6 +122,7 @@ QString labelKindName(RefKind kind)
     case RefKind::Attribute: return QStringLiteral("attribute");
     case RefKind::UnitType: return QStringLiteral("unit-type");
     case RefKind::TechType: return QStringLiteral("tech-type");
+    case RefKind::EffectType: return QStringLiteral("effect-type");
     }
     return {};
 }

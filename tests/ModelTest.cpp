@@ -868,6 +868,7 @@ void ModelTest::refNameLabelsReferences()
     QCOMPARE(refName(closed, RefKind::UnitType, 99, 0), QStringLiteral("Unknown"));
     QCOMPARE(refName(closed, RefKind::TechType, 2, 0), QStringLiteral("Age"));
     QCOMPARE(refName(closed, RefKind::TechType, 5, 0), QStringLiteral("Unknown"));
+    QCOMPARE(refName(closed, RefKind::EffectType, 102, 0), effectTypeName(closed.gameVersion(), 102));
     QCOMPARE(refName(closed, RefKind::Unit, 4, 1), QString());
     QCOMPARE(refName(closed, RefKind::Tech, 22, 1), QString());
     QCOMPARE(refName(closed, RefKind::Civ, 1, 0), QString());
@@ -1300,17 +1301,17 @@ void ModelTest::editAndSaveSample()
 
 void ModelTest::effectFieldsListCommands()
 {
-    QCOMPARE(effectTypeName(genie::GV_TC, 102), QStringLiteral("102 - Disable Tech"));
-    QCOMPARE(effectTypeName(genie::GV_TC, 2), QStringLiteral("2 - Enable/Disable Unit"));
-    QCOMPARE(effectTypeName(genie::GV_AoE, 6), QStringLiteral("6 - Unknown"));
-    QCOMPARE(effectTypeName(genie::GV_AoK, 6), QStringLiteral("6 - Resource Modifier (Multiply)"));
-    QCOMPARE(effectTypeName(genie::GV_Tapsa, 101), QStringLiteral("101 - Tech Cost Modifier (Set/+/-)"));
-    QCOMPARE(effectTypeName(genie::GV_TC, 10), QStringLiteral("10 - Unknown"));
-    QCOMPARE(effectTypeName(genie::GV_C2, 10), QStringLiteral("10 - Team Attribute Modifier (Set)"));
-    QCOMPARE(effectTypeName(genie::GV_SWGB, 10), QStringLiteral("10 - Unknown"));
-    QCOMPARE(effectTypeName(genie::GV_TC, 7), QStringLiteral("7 - Unknown"));
-    QCOMPARE(effectTypeName(genie::GV_C2, 7), QStringLiteral("7 - Spawn Unit"));
-    QCOMPARE(effectTypeName(genie::GV_TC, 99), QStringLiteral("99 - Unknown"));
+    QCOMPARE(effectTypeName(genie::GV_TC, 102), QStringLiteral("Disable Tech"));
+    QCOMPARE(effectTypeName(genie::GV_TC, 2), QStringLiteral("Enable/Disable Unit"));
+    QCOMPARE(effectTypeName(genie::GV_AoE, 6), QStringLiteral("Unknown"));
+    QCOMPARE(effectTypeName(genie::GV_AoK, 6), QStringLiteral("Resource Modifier (Multiply)"));
+    QCOMPARE(effectTypeName(genie::GV_Tapsa, 101), QStringLiteral("Tech Cost Modifier (Set/+/-)"));
+    QCOMPARE(effectTypeName(genie::GV_TC, 10), QStringLiteral("Unknown"));
+    QCOMPARE(effectTypeName(genie::GV_C2, 10), QStringLiteral("Team Attribute Modifier (Set)"));
+    QCOMPARE(effectTypeName(genie::GV_SWGB, 10), QStringLiteral("Unknown"));
+    QCOMPARE(effectTypeName(genie::GV_TC, 7), QStringLiteral("Unknown"));
+    QCOMPARE(effectTypeName(genie::GV_C2, 7), QStringLiteral("Spawn Unit"));
+    QCOMPARE(effectTypeName(genie::GV_TC, 99), QStringLiteral("Unknown"));
 
     genie::Effect effect;
     effect.Name = "Loom";
@@ -1336,6 +1337,8 @@ void ModelTest::effectFieldsListCommands()
             return QStringLiteral("Loom");
         if (kind == RefKind::Unit && id == 4)
             return QStringLiteral("Archer");
+        if (kind == RefKind::EffectType)
+            return effectTypeName(genie::GV_TC, id);
         return QString();
     };
     FieldTreeModel model;
@@ -1346,6 +1349,10 @@ void ModelTest::effectFieldsListCommands()
 
     QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Type")).data().toString(),
              QStringLiteral("102 - Disable Tech"));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Type")).data(FieldTreeModel::ValueRole),
+             QVariant(102));
+    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Type")).data(FieldTreeModel::RefKindRole).toInt(),
+             static_cast<int>(RefKind::EffectType));
     QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Tech")).data().toString(),
              QStringLiteral("Loom (22)"));
     QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Tech")).data(FieldTreeModel::RefKindRole).toInt(),
@@ -1395,6 +1402,7 @@ void ModelTest::effectFieldsListCommands()
             case RefKind::UnitClass: return unitClassName(version, id);
             case RefKind::Attribute: return effectAttributeName(version, id);
             case RefKind::Tech: return id == 22 ? QStringLiteral("Loom") : QString();
+            case RefKind::EffectType: return effectTypeName(version, id);
             default: return QString();
             }
         };
@@ -1554,8 +1562,9 @@ void ModelTest::sampleEffectValues()
              static_cast<int>(session.dat()->Effects.at(22).EffectCommands.size()));
     if (!session.dat()->Effects.at(22).EffectCommands.empty())
     {
+        const int type = session.dat()->Effects.at(22).EffectCommands.front().Type;
         QCOMPARE(fieldText(fields, QStringLiteral("Type")),
-                 effectTypeName(session.gameVersion(), session.dat()->Effects.at(22).EffectCommands.front().Type));
+                 QStringLiteral("%1 - %2").arg(type).arg(effectTypeName(session.gameVersion(), type)));
     }
 
     effects.showFields(-1, fields);

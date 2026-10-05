@@ -9,7 +9,6 @@
 #include "core/Mods.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
-#include "model/EffectFields.h"
 #include "model/RefNames.h"
 
 namespace newage {
@@ -92,13 +91,12 @@ struct FixedTable
     RefKind kind;
 };
 
-// Fixed lists that lookup serves. "effect-type" has no RefKind: effect command
-// types are not reference fields.
+// Fixed lists that lookup serves.
 constexpr FixedTable kFixedTables[] = {
     {QLatin1StringView("resource"), RefKind::Resource},
     {QLatin1StringView("unit-class"), RefKind::UnitClass},
     {QLatin1StringView("attribute"), RefKind::Attribute},
-    {QLatin1StringView("effect-type"), RefKind::None},
+    {QLatin1StringView("effect-type"), RefKind::EffectType},
     {QLatin1StringView("unit-type"), RefKind::UnitType},
     {QLatin1StringView("tech-type"), RefKind::TechType},
 };
@@ -345,21 +343,8 @@ LookupResult DataService::lookup(const QString &table, const QString &text, int 
     }
     else
     {
-        const genie::GameVersion version = session_.gameVersion();
-        if (fixed->kind == RefKind::None)
-        {
-            for (int type : effectTypeIds(version))
-            {
-                // effectTypeName is "102 - Disable Tech"; the ID is reported apart.
-                const QString label = effectTypeName(version, type);
-                rows.append({type, label.mid(label.indexOf(QLatin1String(" - ")) + 3), {}, {}, {}});
-            }
-        }
-        else
-        {
-            for (int id : fixedRefIds(version, fixed->kind))
-                rows.append({id, refName(session_, fixed->kind, id, -1), {}, {}, {}});
-        }
+        for (int id : fixedRefIds(session_.gameVersion(), fixed->kind))
+            rows.append({id, refName(session_, fixed->kind, id, -1), {}, {}, {}});
     }
 
     const QString query = text.trimmed();

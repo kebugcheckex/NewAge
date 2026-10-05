@@ -9,6 +9,7 @@
 
 #include "api/RequestHandler.h"
 #include "genie/dat/DatFile.h"
+#include "model/EffectFields.h"
 #include "model/RefNames.h"
 
 using namespace newage;
@@ -71,6 +72,16 @@ QStringList fieldKeys(const QJsonObject &item)
     for (const QJsonValue &field : item.value(QStringLiteral("fields")).toArray())
         keys.append(field.toObject().value(QStringLiteral("key")).toString());
     return keys;
+}
+
+QJsonObject fieldByKey(const QJsonObject &item, const QString &key)
+{
+    for (const QJsonValue &field : item.value(QStringLiteral("fields")).toArray())
+    {
+        if (field.toObject().value(QStringLiteral("key")).toString() == key)
+            return field.toObject();
+    }
+    return {};
 }
 
 QList<int> itemIds(const HandlerResult &result)
@@ -978,6 +989,16 @@ void CliTest::getFieldPatterns()
     QVERIFY(commandKeys.contains(QStringLiteral("command2.type")));
     for (const QString &key : commandKeys)
         QVERIFY2(key.startsWith(QStringLiteral("command2.")), qPrintable(key));
+
+    // A command type is a number labelled like other codes.
+    const QJsonObject type = fieldByKey(result.body.value(QStringLiteral("items")).toArray().first().toObject(),
+                                        QStringLiteral("command2.type"));
+    const int typeId = dat.Effects[effect].EffectCommands[1].Type;
+    QCOMPARE(type.value(QStringLiteral("type")).toString(), QStringLiteral("int"));
+    QVERIFY(type.value(QStringLiteral("value")).isDouble());
+    QCOMPARE(type.value(QStringLiteral("value")).toInt(), typeId);
+    QCOMPARE(type.value(QStringLiteral("labelKind")).toString(), QStringLiteral("effect-type"));
+    QCOMPARE(type.value(QStringLiteral("label")).toString(), effectTypeName(service.session().gameVersion(), typeId));
 
     request.insert(QStringLiteral("fields"), QJsonArray({QStringLiteral("command2.bogus")}));
     QCOMPARE(errorCode(RequestHandler().handle(tcSource(), request)), QStringLiteral("unknown_field"));

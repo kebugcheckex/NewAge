@@ -18,7 +18,7 @@ class Session;
 QString refName(const Session &session, RefKind kind, int id, int civ);
 
 // IDs named by the fixed list behind `kind` (resources, unit classes,
-// attributes, unit types, tech types), ascending. Empty for kinds whose values
+// attributes, unit types, tech types, effect types), ascending. Empty for kinds whose values
 // are entities in the data.
 QList<int> fixedRefIds(genie::GameVersion version, RefKind kind);
 

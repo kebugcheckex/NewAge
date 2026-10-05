@@ -34,6 +34,9 @@ enum class RefKind
     UnitType,
     // Tech::Type (0 - Regular, 2 - Age). A code, see isCodeKind().
     TechType,
+    // EffectCommand::Type (102 - Disable Tech, ...). Which types exist
+    // depends on the game version. A code, see isCodeKind().
+    EffectType,
 };
 
 // Whether values of `kind` are codes from a fixed list (unit types) rather
@@ -41,7 +44,7 @@ enum class RefKind
 // AGE does, and references as "Archer (4)".
 inline bool isCodeKind(RefKind kind)
 {
-    return kind == RefKind::UnitType || kind == RefKind::TechType;
+    return kind == RefKind::UnitType || kind == RefKind::TechType || kind == RefKind::EffectType;
 }
 
 // An int field that is a frame index in a game sprite. The view may preview

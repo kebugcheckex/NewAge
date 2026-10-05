@@ -29,8 +29,8 @@ struct EffectRef
 // unknown type shows A, B, C and D, omitting any of A/B/C that are -1.
 QList<FieldDesc<EffectRef>> effectFields(const genie::Effect &effect, genie::GameVersion version);
 
-// "102 - Disable Tech" style label for an effect command Type. Unknown or
-// version-inappropriate types are "%1 - Unknown".
+// Label for an effect command Type, without the number: "Disable Tech".
+// Unknown or version-inappropriate types are "Unknown".
 QString effectTypeName(genie::GameVersion version, int type);
 
 // The effect command Types `version` knows, ascending: those effectTypeName()
