@@ -1,5 +1,6 @@
 #include "api/RequestHandler.h"
 
+#include <charconv>
 #include <cmath>
 #include <limits>
 
@@ -231,6 +232,93 @@ ServiceError unknownKind(const QString &kind, const QString &message)
     return error;
 }
 
+// Reads the civ of a list or get request: required for per-civ kinds,
+// optional for techs (it decides availability), refused by other kinds.
+// Returns a usage message, or an empty string.
+QString readCiv(const QJsonObject &request, const QString &op, const EntityKind &kind, int &civ)
+{
+    const QJsonValue civValue = request.value(QStringLiteral("civ"));
+    if (civValue.isUndefined())
+        return kind.perCiv() ? QStringLiteral("%1 %2 needs a civ.").arg(op, kind.key()) : QString();
+    if (!kind.perCiv() && &kind != &techKind())
+        return QStringLiteral("%1 %2 takes no civ.").arg(op, kind.key());
+    if (!readInt(civValue, civ))
+        return QStringLiteral("civ must be an integer.");
+    return {};
+}
+
+// A stored value as JSON. Floats use the shortest form that reads back as the
+// same float, so 0.2f is 0.2 rather than 0.20000000298023224.
+QJsonValue storedValue(const QVariant &value)
+{
+    if (value.typeId() == QMetaType::Float)
+    {
+        char buffer[32];
+        const auto written = std::to_chars(buffer, buffer + sizeof(buffer), value.toFloat());
+        return QByteArray(buffer, written.ptr - buffer).toDouble();
+    }
+    return QJsonValue::fromVariant(value);
+}
+
+QJsonObject fieldObject(const FieldValue &field)
+{
+    QJsonObject item;
+    item.insert(QStringLiteral("key"), field.key);
+    item.insert(QStringLiteral("name"), field.name);
+    item.insert(QStringLiteral("group"), field.group);
+    item.insert(QStringLiteral("type"), field.type);
+    item.insert(QStringLiteral("value"), storedValue(field.value));
+    if (field.labelKind != RefKind::None)
+    {
+        item.insert(QStringLiteral("labelKind"), labelKindName(field.labelKind));
+        if (!field.label.isEmpty())
+            item.insert(QStringLiteral("label"), field.label);
+    }
+    if (!field.text.isEmpty())
+        item.insert(QStringLiteral("text"), field.text);
+    item.insert(QStringLiteral("editable"), field.editable);
+    if (field.minimum)
+        item.insert(QStringLiteral("min"), *field.minimum);
+    if (field.maximum)
+        item.insert(QStringLiteral("max"), *field.maximum);
+    return item;
+}
+
+QJsonObject getObject(const GetQuery &query, bool compact, const GetResult &get)
+{
+    QJsonArray items;
+    for (const GetItem &entity : get.items)
+    {
+        QJsonObject item;
+        item.insert(QStringLiteral("id"), entity.id);
+        item.insert(QStringLiteral("name"), entity.name);
+        item.insert(QStringLiteral("internalName"), entity.internalName);
+        if (entity.active)
+            item.insert(QStringLiteral("active"), *entity.active);
+        if (compact)
+        {
+            QJsonObject fields;
+            for (const FieldValue &field : entity.fields)
+                fields.insert(field.key, storedValue(field.value));
+            item.insert(QStringLiteral("fields"), fields);
+        }
+        else
+        {
+            QJsonArray fields;
+            for (const FieldValue &field : entity.fields)
+                fields.append(fieldObject(field));
+            item.insert(QStringLiteral("fields"), fields);
+        }
+        items.append(item);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("kind"), query.kind);
+    if (query.civ >= 0)
+        body.insert(QStringLiteral("civ"), query.civ);
+    body.insert(QStringLiteral("items"), items);
+    return body;
+}
+
 } // namespace
 
 int exitCodeFor(const QString &code)
@@ -262,7 +350,7 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
         return usage(QStringLiteral("Missing op."));
     const QString op = opValue.toString();
     if (op != QStringLiteral("info") && op != QStringLiteral("schema") && op != QStringLiteral("lookup")
-        && op != QStringLiteral("list"))
+        && op != QStringLiteral("list") && op != QStringLiteral("get"))
         return usage(QStringLiteral("Unknown op \"%1\".").arg(op));
 
     // Check the request before opening, so a malformed one fails fast.
@@ -320,21 +408,8 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
         if (!kind)
             return failed(unknownKind(listQuery.kind, QStringLiteral("Unknown kind \"%1\".").arg(listQuery.kind)));
         const bool isTech = kind == &techKind();
-
-        // Units need a civ; techs take one to judge availability.
-        const QJsonValue civValue = request.value(QStringLiteral("civ"));
-        if (civValue.isUndefined())
-        {
-            if (kind->perCiv())
-                return usage(QStringLiteral("list %1 needs a civ.").arg(listQuery.kind));
-        }
-        else
-        {
-            if (!kind->perCiv() && !isTech)
-                return usage(QStringLiteral("list %1 takes no civ.").arg(listQuery.kind));
-            if (!readInt(civValue, listQuery.civ))
-                return usage(QStringLiteral("civ must be an integer."));
-        }
+        if (const QString problem = readCiv(request, op, *kind, listQuery.civ); !problem.isEmpty())
+            return usage(problem);
 
         const QJsonValue ownerValue = request.value(QStringLiteral("ownerCiv"));
         if (!ownerValue.isUndefined())
@@ -360,6 +435,50 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
             return usage(QStringLiteral("limit must be a non-negative integer."));
     }
 
+    GetQuery getQuery;
+    bool compact = false;
+    if (op == QStringLiteral("get"))
+    {
+        const QJsonValue kindValue = request.value(QStringLiteral("kind"));
+        if (!kindValue.isString() || kindValue.toString().isEmpty())
+            return usage(QStringLiteral("get needs a kind."));
+        getQuery.kind = kindValue.toString();
+        const EntityKind *kind = findEntityKind(getQuery.kind);
+        if (!kind)
+            return failed(unknownKind(getQuery.kind, QStringLiteral("Unknown kind \"%1\".").arg(getQuery.kind)));
+        if (const QString problem = readCiv(request, op, *kind, getQuery.civ); !problem.isEmpty())
+            return usage(problem);
+
+        const QJsonValue idsValue = request.value(QStringLiteral("ids"));
+        if (!idsValue.isArray() || idsValue.toArray().isEmpty())
+            return usage(QStringLiteral("get needs a non-empty ids array."));
+        for (const QJsonValue &idValue : idsValue.toArray())
+        {
+            int id = -1;
+            if (!readInt(idValue, id))
+                return usage(QStringLiteral("ids must be integers."));
+            getQuery.ids.append(id);
+        }
+
+        const QJsonValue fieldsValue = request.value(QStringLiteral("fields"));
+        if (!fieldsValue.isUndefined())
+        {
+            if (!fieldsValue.isArray() || fieldsValue.toArray().isEmpty())
+                return usage(QStringLiteral("fields must be a non-empty array of keys."));
+            for (const QJsonValue &fieldValue : fieldsValue.toArray())
+            {
+                if (!fieldValue.isString() || fieldValue.toString().trimmed().isEmpty())
+                    return usage(QStringLiteral("fields must be a non-empty array of keys."));
+                getQuery.fields.append(fieldValue.toString().trimmed());
+            }
+        }
+
+        const QJsonValue compactValue = request.value(QStringLiteral("compact"));
+        if (!compactValue.isUndefined() && !compactValue.isBool())
+            return usage(QStringLiteral("compact must be true or false."));
+        compact = compactValue.toBool();
+    }
+
     const DataSource resolved = resolveSource(source);
     DataService service;
     const OpenResult opened = service.open(resolved);
@@ -380,6 +499,13 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
         if (!list.ok)
             return failed(list.error, opened.warnings);
         return succeeded(listObject(listQuery, list), opened.warnings);
+    }
+    if (op == QStringLiteral("get"))
+    {
+        const GetResult get = service.get(getQuery);
+        if (!get.ok)
+            return failed(get.error, opened.warnings);
+        return succeeded(getObject(getQuery, compact, get), opened.warnings);
     }
     if (!schemaKind.isEmpty())
         return succeeded(schemaObject(*service.kind(schemaKind), service.session()), opened.warnings);

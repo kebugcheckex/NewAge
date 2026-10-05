@@ -26,7 +26,7 @@ For HD and DE, edit mods instead of the game's own files. Opening a game folder 
 
 ## CLI
 
-The read-only CLI currently supports `info`, `schema [civ|unit|tech|effect]` `lookup <table> [TEXT] [--civ N]` and `list <kind> [--civ N] [--owner-civ N] [--all] [--limit N --offset N]`. For an installed game, run `build/msvc/Debug/newage-cli.exe --game "C:\\Games\\AoE2DE" info`; for a loose file, use `--dat FILE --version KEY schema unit`. It prints one JSON result to stdout, with warnings and diagnostics as JSON lines on stderr. The remaining commands in [the CLI design](docs/CLI.md) are still planned.
+The read-only CLI currently supports `info`, `schema [civ|unit|tech|effect]` `lookup <table> [TEXT] [--civ N]`, `list <kind> [--civ N] [--owner-civ N] [--all] [--limit N --offset N]` and `get <kind> <id>... [--civ N] [--fields KEY,KEY,cost*] [--compact]`. For an installed game, run `build/msvc/Debug/newage-cli.exe --game "C:\\Games\\AoE2DE" info`; for a loose file, use `--dat FILE --version KEY schema unit`. It prints one JSON result to stdout, with warnings and diagnostics as JSON lines on stderr. The remaining commands in [the CLI design](docs/CLI.md) are still planned.
 
 ## Layout
 

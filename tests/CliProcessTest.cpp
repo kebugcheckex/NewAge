@@ -61,6 +61,8 @@ private slots:
     void lookupReadsLooseFile();
     void listOptionsOnlyWithList();
     void listReadsLooseFile();
+    void getOptionsOnlyWithGet();
+    void getReadsLooseFile();
 };
 
 void CliProcessTest::missingCommandIsJsonUsage()
@@ -178,6 +180,54 @@ void CliProcessTest::listReadsLooseFile()
     QCOMPARE(items.size(), 2);
     QCOMPARE(items.first().toObject().value(QStringLiteral("id")).toInt(), 1);
     QVERIFY(items.first().toObject().contains(QStringLiteral("active")));
+}
+
+void CliProcessTest::getOptionsOnlyWithGet()
+{
+    Response response = run({QStringLiteral("list"), QStringLiteral("tech"), QStringLiteral("--compact")});
+    QCOMPARE(response.exitCode, 1);
+    QCOMPARE(errorCode(response), QStringLiteral("usage"));
+
+    response = run({QStringLiteral("get"), QStringLiteral("tech")});
+    QCOMPARE(response.exitCode, 1);
+    QCOMPARE(errorCode(response), QStringLiteral("usage"));
+
+    response = run({QStringLiteral("get"), QStringLiteral("tech"), QStringLiteral("ten")});
+    QCOMPARE(response.exitCode, 1);
+    QCOMPARE(errorCode(response), QStringLiteral("usage"));
+}
+
+void CliProcessTest::getReadsLooseFile()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    Response response = run({QStringLiteral("--dat"), kTcDat, QStringLiteral("--version"), QStringLiteral("tc"),
+                             QStringLiteral("get"), QStringLiteral("unit"), QStringLiteral("4"), QStringLiteral("--civ"),
+                             QStringLiteral("1"), QStringLiteral("--fields"), QStringLiteral("hit_points, cost1.*")});
+    QCOMPARE(response.exitCode, 0);
+    QCOMPARE(response.body.value(QStringLiteral("kind")).toString(), QStringLiteral("unit"));
+    QCOMPARE(response.body.value(QStringLiteral("civ")).toInt(), 1);
+    const QJsonArray items = response.body.value(QStringLiteral("items")).toArray();
+    QCOMPARE(items.size(), 1);
+    const QJsonObject archer = items.first().toObject();
+    QCOMPARE(archer.value(QStringLiteral("internalName")).toString(), QStringLiteral("ARCHR"));
+    QStringList keys;
+    for (const QJsonValue &field : archer.value(QStringLiteral("fields")).toArray())
+        keys.append(field.toObject().value(QStringLiteral("key")).toString());
+    QCOMPARE(keys, QStringList({QStringLiteral("hit_points"), QStringLiteral("cost1.resource"),
+                                QStringLiteral("cost1.amount"), QStringLiteral("cost1.paid")}));
+
+    response = run({QStringLiteral("--dat"), kTcDat, QStringLiteral("--version"), QStringLiteral("tc"),
+                    QStringLiteral("get"), QStringLiteral("tech"), QStringLiteral("3"), QStringLiteral("2"),
+                    QStringLiteral("--fields"), QStringLiteral("research_time"), QStringLiteral("--compact")});
+    QCOMPARE(response.exitCode, 0);
+    const QJsonArray techs = response.body.value(QStringLiteral("items")).toArray();
+    QCOMPARE(techs.size(), 2);
+    QCOMPARE(techs.at(0).toObject().value(QStringLiteral("id")).toInt(), 3);
+    QCOMPARE(techs.at(1).toObject().value(QStringLiteral("id")).toInt(), 2);
+    const QJsonObject fields = techs.at(0).toObject().value(QStringLiteral("fields")).toObject();
+    QCOMPARE(fields.keys(), QStringList({QStringLiteral("research_time")}));
+    QVERIFY(fields.value(QStringLiteral("research_time")).isDouble());
 }
 
 QTEST_GUILESS_MAIN(CliProcessTest)

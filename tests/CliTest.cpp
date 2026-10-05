@@ -2,12 +2,14 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTest>
 
 #include "api/RequestHandler.h"
 #include "genie/dat/DatFile.h"
+#include "model/RefNames.h"
 
 using namespace newage;
 
@@ -50,6 +52,25 @@ QJsonObject list(const QString &kind)
     QJsonObject request = op(QStringLiteral("list"));
     request.insert(QStringLiteral("kind"), kind);
     return request;
+}
+
+QJsonObject get(const QString &kind, const QList<int> &ids)
+{
+    QJsonObject request = op(QStringLiteral("get"));
+    request.insert(QStringLiteral("kind"), kind);
+    QJsonArray array;
+    for (const int id : ids)
+        array.append(id);
+    request.insert(QStringLiteral("ids"), array);
+    return request;
+}
+
+QStringList fieldKeys(const QJsonObject &item)
+{
+    QStringList keys;
+    for (const QJsonValue &field : item.value(QStringLiteral("fields")).toArray())
+        keys.append(field.toObject().value(QStringLiteral("key")).toString());
+    return keys;
 }
 
 QList<int> itemIds(const HandlerResult &result)
@@ -108,6 +129,13 @@ private slots:
     void listHidesEmptyUnitSlots();
     void listTechsByOwnerAndAvailability();
     void listPages();
+    void getChecksRequestBeforeOpen_data();
+    void getChecksRequestBeforeOpen();
+    void getUnknownEntities();
+    void getUnitFields();
+    void getFieldPatterns();
+    void getCompact();
+    void getTechActivityAndLabels();
 };
 
 void CliTest::init()
@@ -753,6 +781,278 @@ void CliTest::listPages()
     QCOMPARE(page.exitCode, 0);
     QVERIFY(itemIds(page).isEmpty());
     QCOMPARE(page.body.value(QStringLiteral("total")).toInt(), ids.size());
+}
+
+void CliTest::getChecksRequestBeforeOpen_data()
+{
+    QTest::addColumn<QJsonObject>("request");
+    QTest::addColumn<QString>("code");
+
+    const auto with = [](QJsonObject request, const QString &key, const QJsonValue &value) {
+        request.insert(key, value);
+        return request;
+    };
+    const QJsonObject tech = get(QStringLiteral("tech"), {1});
+    QTest::newRow("no kind") << with(op(QStringLiteral("get")), QStringLiteral("ids"), QJsonArray({1}))
+                             << QStringLiteral("usage");
+    QTest::newRow("unknown kind") << get(QStringLiteral("bogus"), {1}) << QStringLiteral("unknown_kind");
+    QTest::newRow("unit without civ") << get(QStringLiteral("unit"), {1}) << QStringLiteral("usage");
+    QTest::newRow("civ on effects") << with(get(QStringLiteral("effect"), {1}), QStringLiteral("civ"), 1)
+                                    << QStringLiteral("usage");
+    QTest::newRow("no ids") << get(QStringLiteral("tech"), {}) << QStringLiteral("usage");
+    QTest::newRow("ids not an array") << with(tech, QStringLiteral("ids"), 1) << QStringLiteral("usage");
+    QTest::newRow("fractional id") << with(tech, QStringLiteral("ids"), QJsonArray({1.5}))
+                                   << QStringLiteral("usage");
+    QTest::newRow("empty fields") << with(tech, QStringLiteral("fields"), QJsonArray()) << QStringLiteral("usage");
+    QTest::newRow("blank field") << with(tech, QStringLiteral("fields"), QJsonArray({QStringLiteral(" ")}))
+                                 << QStringLiteral("usage");
+    QTest::newRow("field not a string") << with(tech, QStringLiteral("fields"), QJsonArray({1}))
+                                        << QStringLiteral("usage");
+    QTest::newRow("compact not a bool") << with(tech, QStringLiteral("compact"), 1) << QStringLiteral("usage");
+}
+
+void CliTest::getChecksRequestBeforeOpen()
+{
+    QFETCH(QJsonObject, request);
+    QFETCH(QString, code);
+    const HandlerResult result = RequestHandler().handle({}, request);
+    QCOMPARE(errorCode(result), code);
+    QCOMPARE(result.exitCode, exitCodeFor(code));
+}
+
+void CliTest::getUnknownEntities()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    DataService service;
+    QVERIFY(service.open(tcSource()).ok);
+    const Session &session = service.session();
+    int empty = -1;
+    for (int id = 0; id < unitKind().count(session, 1) && empty < 0; ++id)
+    {
+        if (!unitKind().isActive(session, 1, id))
+            empty = id;
+    }
+    QVERIFY(empty >= 0);
+    const int techs = techKind().count(session, 0);
+
+    struct Case
+    {
+        QString kind;
+        QList<int> ids;
+        int civ;
+        QString code;
+        QString errorKind;
+        int errorId;
+        int errorCiv;
+    };
+    const QList<Case> cases = {
+        {QStringLiteral("tech"), {1}, 999, QStringLiteral("unknown_entity"), QStringLiteral("civ"), 999, -1},
+        {QStringLiteral("unit"), {4}, 999, QStringLiteral("unknown_entity"), QStringLiteral("civ"), 999, -1},
+        {QStringLiteral("tech"), {1, techs}, -1, QStringLiteral("unknown_entity"), QStringLiteral("tech"), techs, -1},
+        {QStringLiteral("effect"), {-1}, -1, QStringLiteral("unknown_entity"), QStringLiteral("effect"), -1, -1},
+        {QStringLiteral("unit"), {4, empty}, 1, QStringLiteral("inactive_entity"), QStringLiteral("unit"), empty, 1},
+    };
+    for (const Case &item : cases)
+    {
+        QJsonObject request = get(item.kind, item.ids);
+        if (item.civ != -1)
+            request.insert(QStringLiteral("civ"), item.civ);
+        const HandlerResult result = RequestHandler().handle(tcSource(), request);
+        QCOMPARE(errorCode(result), item.code);
+        QCOMPARE(result.exitCode, 3);
+        QVERIFY(!result.body.contains(QStringLiteral("items")));
+        const QJsonObject error = result.body.value(QStringLiteral("error")).toObject();
+        QCOMPARE(error.value(QStringLiteral("kind")).toString(), item.errorKind);
+        // The error body leaves out negative IDs and civs.
+        QCOMPARE(error.value(QStringLiteral("id")).toInt(-1), item.errorId);
+        QCOMPARE(error.value(QStringLiteral("civ")).toInt(-1), item.errorCiv);
+    }
+}
+
+void CliTest::getUnitFields()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    DataService service;
+    QVERIFY(service.open(tcSource()).ok);
+    const Session &session = service.session();
+    const QList<FieldValue> fields = unitKind().fields(session, 1, 4);
+    QVERIFY(!fields.isEmpty());
+
+    // Duplicates and order are kept.
+    QJsonObject request = get(QStringLiteral("unit"), {4, 83, 4});
+    request.insert(QStringLiteral("civ"), 1);
+    const HandlerResult result = RequestHandler().handle(tcSource(), request);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("kind")).toString(), QStringLiteral("unit"));
+    QCOMPARE(result.body.value(QStringLiteral("civ")).toInt(), 1);
+    QCOMPARE(itemIds(result), QList<int>({4, 83, 4}));
+
+    const QJsonObject archer = result.body.value(QStringLiteral("items")).toArray().first().toObject();
+    QCOMPARE(archer.value(QStringLiteral("name")).toString(), unitKind().name(session, 1, 4));
+    QCOMPARE(archer.value(QStringLiteral("internalName")).toString(), QStringLiteral("ARCHR"));
+    QVERIFY(!archer.contains(QStringLiteral("active")));
+    const QJsonArray rows = archer.value(QStringLiteral("fields")).toArray();
+    QCOMPARE(rows.size(), fields.size());
+    bool sawFloat = false;
+    bool sawLabel = false;
+    for (qsizetype i = 0; i < rows.size(); ++i)
+    {
+        const QJsonObject row = rows.at(i).toObject();
+        const FieldValue &field = fields.at(i);
+        QCOMPARE(row.value(QStringLiteral("key")).toString(), field.key);
+        QCOMPARE(row.value(QStringLiteral("name")).toString(), field.name);
+        QCOMPARE(row.value(QStringLiteral("group")).toString(), field.group);
+        QCOMPARE(row.value(QStringLiteral("type")).toString(), field.type);
+        QCOMPARE(row.value(QStringLiteral("editable")).toBool(), field.editable);
+        QCOMPARE(row.contains(QStringLiteral("min")), field.minimum.has_value());
+        QCOMPARE(row.contains(QStringLiteral("max")), field.maximum.has_value());
+        if (field.type == QLatin1String("float"))
+        {
+            // The shortest form that reads back as the same float.
+            sawFloat = true;
+            const QJsonValue value = row.value(QStringLiteral("value"));
+            QCOMPARE(static_cast<float>(value.toDouble()), field.value.toFloat());
+            const QByteArray json = QJsonDocument(QJsonArray({value})).toJson(QJsonDocument::Compact);
+            QVERIFY2(json.size() <= 12, json.constData());
+        }
+        else if (field.type == QLatin1String("string"))
+        {
+            QCOMPARE(row.value(QStringLiteral("value")).toString(), field.value.toString());
+        }
+        else
+        {
+            QCOMPARE(row.value(QStringLiteral("value")).toInt(), field.value.toInt());
+        }
+        QCOMPARE(row.contains(QStringLiteral("labelKind")), field.labelKind != RefKind::None);
+        QCOMPARE(row.value(QStringLiteral("label")).toString(), field.label);
+        sawLabel = sawLabel || !field.label.isEmpty();
+    }
+    QVERIFY(sawFloat);
+    QVERIFY(sawLabel);
+}
+
+void CliTest::getFieldPatterns()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    QJsonObject request = get(QStringLiteral("unit"), {4});
+    request.insert(QStringLiteral("civ"), 1);
+    request.insert(QStringLiteral("fields"), QJsonArray({QStringLiteral("cost*"), QStringLiteral("hit_points")}));
+    HandlerResult result = RequestHandler().handle(tcSource(), request);
+    QCOMPARE(result.exitCode, 0);
+    // Descriptor order, not pattern order.
+    const QStringList keys = fieldKeys(result.body.value(QStringLiteral("items")).toArray().first().toObject());
+    QCOMPARE(keys.first(), QStringLiteral("hit_points"));
+    QVERIFY(keys.size() > 1);
+    for (const QString &key : keys.mid(1))
+        QVERIFY2(key.startsWith(QStringLiteral("cost")), qPrintable(key));
+
+    // A pattern that matches no key of the kind is unknown_field.
+    request.insert(QStringLiteral("fields"), QJsonArray({QStringLiteral("hit_points"), QStringLiteral("hitpoints")}));
+    result = RequestHandler().handle(tcSource(), request);
+    QCOMPARE(errorCode(result), QStringLiteral("unknown_field"));
+    const QJsonObject error = result.body.value(QStringLiteral("error")).toObject();
+    QCOMPARE(error.value(QStringLiteral("kind")).toString(), QStringLiteral("unit"));
+    QCOMPARE(error.value(QStringLiteral("key")).toString(), QStringLiteral("hitpoints"));
+
+    // Effect command keys are known through the commandN templates, whether
+    // or not this effect has that many commands.
+    DataService service;
+    QVERIFY(service.open(tcSource()).ok);
+    const genie::DatFile &dat = *service.session().dat();
+    int effect = -1;
+    for (int id = 0; id < int(dat.Effects.size()) && effect < 0; ++id)
+    {
+        if (dat.Effects[id].EffectCommands.size() >= 2)
+            effect = id;
+    }
+    QVERIFY(effect >= 0);
+    request = get(QStringLiteral("effect"), {effect});
+    request.insert(QStringLiteral("fields"),
+                   QJsonArray({QStringLiteral("command2.*"), QStringLiteral("command999.amount")}));
+    result = RequestHandler().handle(tcSource(), request);
+    QCOMPARE(result.exitCode, 0);
+    const QStringList commandKeys = fieldKeys(result.body.value(QStringLiteral("items")).toArray().first().toObject());
+    QVERIFY(commandKeys.contains(QStringLiteral("command2.type")));
+    for (const QString &key : commandKeys)
+        QVERIFY2(key.startsWith(QStringLiteral("command2.")), qPrintable(key));
+
+    request.insert(QStringLiteral("fields"), QJsonArray({QStringLiteral("command2.bogus")}));
+    QCOMPARE(errorCode(RequestHandler().handle(tcSource(), request)), QStringLiteral("unknown_field"));
+}
+
+void CliTest::getCompact()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    DataService service;
+    QVERIFY(service.open(tcSource()).ok);
+    QJsonObject request = get(QStringLiteral("unit"), {4});
+    request.insert(QStringLiteral("civ"), 1);
+    request.insert(QStringLiteral("compact"), true);
+    const HandlerResult result = RequestHandler().handle(tcSource(), request);
+    QCOMPARE(result.exitCode, 0);
+    const QJsonObject fields = result.body.value(QStringLiteral("items"))
+                                   .toArray()
+                                   .first()
+                                   .toObject()
+                                   .value(QStringLiteral("fields"))
+                                   .toObject();
+    const QList<FieldValue> expected = unitKind().fields(service.session(), 1, 4);
+    QCOMPARE(fields.size(), expected.size());
+    for (const FieldValue &field : expected)
+    {
+        QVERIFY2(fields.contains(field.key), qPrintable(field.key));
+        if (field.type == QLatin1String("int"))
+            QCOMPARE(fields.value(field.key).toInt(), field.value.toInt());
+    }
+}
+
+void CliTest::getTechActivityAndLabels()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    DataService service;
+    QVERIFY(service.open(tcSource()).ok);
+    const Session &session = service.session();
+    const QList<TechAvailability> availability = techAvailability(session, 1);
+    int available = -1;
+    int unavailable = -1;
+    for (int id = 0; id < availability.size(); ++id)
+    {
+        const auto &locations = session.dat()->Techs[id].ResearchLocations;
+        const bool located = !locations.empty() && locations.front().LocationID >= 0;
+        if (located && available < 0 && availability.at(id) == TechAvailability::Available)
+            available = id;
+        if (unavailable < 0 && availability.at(id) != TechAvailability::Available)
+            unavailable = id;
+    }
+    QVERIFY(available >= 0 && unavailable >= 0);
+
+    // Without a civ, techs have no activity and unit labels name civ 0's copy.
+    QJsonObject request = get(QStringLiteral("tech"), {available, unavailable});
+    request.insert(QStringLiteral("fields"), QJsonArray({QStringLiteral("research_location")}));
+    HandlerResult result = RequestHandler().handle(tcSource(), request);
+    QCOMPARE(result.exitCode, 0);
+    QVERIFY(!result.body.contains(QStringLiteral("civ")));
+    const QJsonObject first = result.body.value(QStringLiteral("items")).toArray().first().toObject();
+    QVERIFY(!first.contains(QStringLiteral("active")));
+    const QJsonObject location = first.value(QStringLiteral("fields")).toArray().first().toObject();
+    QCOMPARE(location.value(QStringLiteral("labelKind")).toString(), QStringLiteral("unit"));
+    const int unit = location.value(QStringLiteral("value")).toInt();
+    QVERIFY(!refName(session, RefKind::Unit, unit, 0).isEmpty());
+    QCOMPARE(location.value(QStringLiteral("label")).toString(), refName(session, RefKind::Unit, unit, 0));
+
+    // With a civ, each tech says whether that civ can research it.
+    request.insert(QStringLiteral("civ"), 1);
+    result = RequestHandler().handle(tcSource(), request);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("civ")).toInt(), 1);
+    const QJsonArray items = result.body.value(QStringLiteral("items")).toArray();
+    QCOMPARE(items.at(0).toObject().value(QStringLiteral("active")).toBool(), true);
+    QCOMPARE(items.at(1).toObject().value(QStringLiteral("active")).toBool(), false);
 }
 
 QTEST_GUILESS_MAIN(CliTest)

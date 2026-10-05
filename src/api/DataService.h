@@ -128,6 +128,36 @@ struct ListResult
     QList<ListRow> rows;
 };
 
+// What `get` reads. `civ` selects the unit copy (required for units); for
+// techs it is optional and decides `active`. Other kinds take no civ.
+// `fields` are keys or `*` wildcard patterns; empty means every field.
+struct GetQuery
+{
+    QString kind;
+    QList<int> ids;
+    int civ = -1;
+    QStringList fields;
+};
+
+// One entity `get` read. `active` is set for techs when a civ is given.
+// `fields` are the applicable fields that match the query, in descriptor order.
+struct GetItem
+{
+    int id = -1;
+    QString name;
+    QString internalName;
+    std::optional<bool> active;
+    QList<FieldValue> fields;
+};
+
+// `items` follow the order of `GetQuery::ids`.
+struct GetResult
+{
+    bool ok = false;
+    ServiceError error;
+    QList<GetItem> items;
+};
+
 struct OpenResult
 {
     bool ok = false;
@@ -184,6 +214,13 @@ public:
     // out unless `query.all`. A civ or owner civ out of range is
     // unknown_entity; an unknown kind is unknown_kind.
     ListResult list(const ListQuery &query) const;
+
+    // Fields of each entity in `query.ids`. An ID out of range is
+    // unknown_entity and an empty unit slot inactive_entity, which fail the
+    // whole read. A field pattern that matches no key in the kind's schema is
+    // unknown_field; one that matches only fields this entity lacks is not an
+    // error. Unit labels in global kinds name the civ's copy, else civ 0's.
+    GetResult get(const GetQuery &query) const;
 
     // Checks every edit against the loaded data, then stores the ones that
     // change a value, then saves once. A failed check writes nothing. A dry

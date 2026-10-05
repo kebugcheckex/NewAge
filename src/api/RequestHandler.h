@@ -26,7 +26,8 @@ struct HandlerResult
 // `request` is an op object: `{"op": "info"}`, `{"op": "schema", "kind": "unit"}`,
 // `{"op": "lookup", "table": "unit", "text": "archer", "civ": 1}` or
 // `{"op": "list", "kind": "tech", "civ": 1, "ownerCiv": 9, "all": true,
-// "offset": 0, "limit": 50}`.
+// "offset": 0, "limit": 50}` or `{"op": "get", "kind": "unit", "ids": [4, 5],
+// "civ": 1, "fields": ["hit_points", "cost*"], "compact": true}`.
 // Source options stay on `source`, not in the request, because a batch
 // shares one open. Empty game, dataset, mod and mods-folder fields are filled
 // from the environment before opening.

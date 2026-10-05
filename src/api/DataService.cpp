@@ -4,6 +4,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 
 #include "core/Mods.h"
 #include "core/VersionProfile.h"
@@ -150,6 +151,50 @@ ServiceError unknownCiv(int civ)
     error.kind = civKind().key();
     error.id = civ;
     return error;
+}
+
+// Whether a read's civ is out of range. Per-civ kinds need one; a tech read
+// may name one for availability; other kinds take none.
+bool civOutOfRange(const EntityKind &kind, int civ, int civs)
+{
+    const bool used = kind.perCiv() || (&kind == &techKind() && civ != -1);
+    return used && (civ < 0 || civ >= civs);
+}
+
+// `get` field patterns: a key, or a key with `*` wildcards.
+QList<QRegularExpression> fieldPatterns(const QStringList &fields)
+{
+    QList<QRegularExpression> patterns;
+    for (const QString &field : fields)
+        patterns.append(QRegularExpression(
+            QRegularExpression::wildcardToRegularExpression(field, QRegularExpression::NonPathWildcardConversion)));
+    return patterns;
+}
+
+bool matchesAny(const QList<QRegularExpression> &patterns, const QString &key)
+{
+    return std::any_of(patterns.cbegin(), patterns.cend(),
+                       [&key](const QRegularExpression &pattern) { return pattern.match(key).hasMatch(); });
+}
+
+// The first pattern that matches no key of `schema`, or an empty string.
+// Effect schemas list command fields as `commandN.*` templates, so a pattern
+// naming a numbered command is also tried with the number as `N`.
+QString unmatchedPattern(const QStringList &fields, const QList<FieldSchema> &schema)
+{
+    static const QRegularExpression commandNumber(QStringLiteral("command\\d+"));
+    for (const QString &field : fields)
+    {
+        QString templated = field;
+        templated.replace(commandNumber, QStringLiteral("commandN"));
+        const QList<QRegularExpression> patterns = fieldPatterns({field, templated});
+        const bool known = std::any_of(schema.cbegin(), schema.cend(), [&patterns](const FieldSchema &row) {
+            return matchesAny(patterns, row.key);
+        });
+        if (!known)
+            return field;
+    }
+    return {};
 }
 
 } // namespace
@@ -355,7 +400,7 @@ ListResult DataService::list(const ListQuery &query) const
     }
     const int civs = civKind().count(session_, 0);
     const bool isTech = kind == &techKind();
-    if ((kind->perCiv() || (isTech && query.civ != -1)) && (query.civ < 0 || query.civ >= civs))
+    if (civOutOfRange(*kind, query.civ, civs))
     {
         result.error = unknownCiv(query.civ);
         return result;
@@ -398,6 +443,66 @@ ListResult DataService::list(const ListQuery &query) const
         row.name = kind->name(session_, query.civ, id);
         row.internalName = kind->internalName(session_, query.civ, id);
         result.rows.append(row);
+    }
+    result.ok = true;
+    return result;
+}
+
+GetResult DataService::get(const GetQuery &query) const
+{
+    GetResult result;
+    const EntityKind *kind = findEntityKind(query.kind);
+    if (!kind)
+    {
+        result.error = unknownKind(query.kind, QStringLiteral("Unknown kind \"%1\".").arg(query.kind));
+        return result;
+    }
+    if (civOutOfRange(*kind, query.civ, civKind().count(session_, 0)))
+    {
+        result.error = unknownCiv(query.civ);
+        return result;
+    }
+    if (const QString field = unmatchedPattern(query.fields, kind->schema(session_)); !field.isEmpty())
+    {
+        result.error = makeError(QStringLiteral("unknown_field"),
+                                 QStringLiteral("No %1 field matches \"%2\".").arg(query.kind, field));
+        result.error.kind = query.kind;
+        result.error.key = field;
+        return result;
+    }
+
+    const bool isTech = kind == &techKind();
+    const int labelCiv = query.civ >= 0 ? query.civ : 0;
+    const int count = kind->count(session_, query.civ);
+    const QList<QRegularExpression> patterns = fieldPatterns(query.fields);
+    for (const int id : query.ids)
+    {
+        const auto entityError = [&](const QString &code, const QString &message) {
+            result.error = makeError(code, message);
+            result.error.kind = query.kind;
+            result.error.id = id;
+            result.error.civ = kind->perCiv() ? query.civ : -1;
+            result.items.clear();
+            return result;
+        };
+        if (id < 0 || id >= count)
+            return entityError(QStringLiteral("unknown_entity"), QStringLiteral("No %1 %2.").arg(query.kind).arg(id));
+        if (kind->perCiv() && !kind->isActive(session_, query.civ, id))
+            return entityError(QStringLiteral("inactive_entity"),
+                               QStringLiteral("%1 %2 is an empty slot in civ %3.").arg(query.kind).arg(id).arg(query.civ));
+
+        GetItem item;
+        item.id = id;
+        item.name = kind->name(session_, query.civ, id);
+        item.internalName = kind->internalName(session_, query.civ, id);
+        if (isTech && query.civ >= 0)
+            item.active = kind->isActive(session_, query.civ, id);
+        for (const FieldValue &field : kind->fields(session_, labelCiv, id))
+        {
+            if (patterns.isEmpty() || matchesAny(patterns, field.key))
+                item.fields.append(field);
+        }
+        result.items.append(item);
     }
     result.ok = true;
     return result;

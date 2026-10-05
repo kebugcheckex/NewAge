@@ -4,6 +4,7 @@
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -102,8 +103,11 @@ int main(int argc, char *argv[])
     const QCommandLineOption limit(QStringLiteral("limit"), QStringLiteral("At most N rows."), QStringLiteral("N"));
     const QCommandLineOption offset(QStringLiteral("offset"), QStringLiteral("Skip the first N rows."),
                                     QStringLiteral("N"));
+    const QCommandLineOption fields(QStringLiteral("fields"), QStringLiteral("Field keys or patterns, comma-separated."),
+                                    QStringLiteral("KEYS"));
+    const QCommandLineOption compact(QStringLiteral("compact"), QStringLiteral("Fields as a key-to-value object."));
     for (const QCommandLineOption &option :
-         {game, dataset, mod, modsFolder, dat, version, locale, civ, ownerCiv, all, limit, offset})
+         {game, dataset, mod, modsFolder, dat, version, locale, civ, ownerCiv, all, limit, offset, fields, compact})
         parser.addOption(option);
 
     if (!parser.parse(app.arguments()))
@@ -131,16 +135,28 @@ int main(int argc, char *argv[])
         if (positional.size() != 2)
             return usage(QStringLiteral("Expected list <kind>."));
     }
+    else if (command == QStringLiteral("get"))
+    {
+        if (positional.size() < 3)
+            return usage(QStringLiteral("Expected get <kind> <id>..."));
+    }
     else
     {
-        return usage(QStringLiteral("Expected info, schema [kind], lookup <table> [TEXT] or list <kind>."));
+        return usage(
+            QStringLiteral("Expected info, schema [kind], lookup <table> [TEXT], list <kind> or get <kind> <id>..."));
     }
     const bool lists = command == QStringLiteral("list");
-    if (parser.isSet(civ) && command != QStringLiteral("lookup") && !lists)
+    const bool gets = command == QStringLiteral("get");
+    if (parser.isSet(civ) && command != QStringLiteral("lookup") && !lists && !gets)
         return usage(QStringLiteral("--civ is not used by %1.").arg(command));
     for (const QCommandLineOption &option : {ownerCiv, all, limit, offset})
     {
         if (parser.isSet(option) && !lists)
+            return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), command));
+    }
+    for (const QCommandLineOption &option : {fields, compact})
+    {
+        if (parser.isSet(option) && !gets)
             return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), command));
     }
     if (parser.isSet(dat) && (parser.isSet(game) || parser.isSet(dataset)))
@@ -173,6 +189,29 @@ int main(int argc, char *argv[])
         request.insert(QStringLiteral("kind"), positional.at(1));
         if (parser.isSet(all))
             request.insert(QStringLiteral("all"), true);
+    }
+    if (gets)
+    {
+        request.insert(QStringLiteral("kind"), positional.at(1));
+        QJsonArray ids;
+        for (const QString &text : positional.mid(2))
+        {
+            bool ok = false;
+            const int id = text.toInt(&ok);
+            if (!ok)
+                return usage(QStringLiteral("get IDs must be integers, not \"%1\".").arg(text));
+            ids.append(id);
+        }
+        request.insert(QStringLiteral("ids"), ids);
+        if (parser.isSet(fields))
+        {
+            QJsonArray keys;
+            for (const QString &key : parser.value(fields).split(QLatin1Char(',')))
+                keys.append(key.trimmed());
+            request.insert(QStringLiteral("fields"), keys);
+        }
+        if (parser.isSet(compact))
+            request.insert(QStringLiteral("compact"), true);
     }
     if (parser.isSet(civ) && !insertInt(request, QStringLiteral("civ"), parser.value(civ)))
         return usage(QStringLiteral("--civ needs an integer."));

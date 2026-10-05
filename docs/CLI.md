@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup` and `list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. `get`, `batch` and `mods list` are not built yet.
+Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list` and `get` with shared source options; `cli_test` and `cli_process_test` check their JSON output. `batch` and `mods list` are not built yet.
 
 ## 1. Goal
 
@@ -120,7 +120,7 @@ newage-cli info                                    # game, data set, mod, file v
 newage-cli schema [civ|unit|tech|effect]           # field keys, names, groups, types, ranges, editable, label kind
 newage-cli lookup <table> [TEXT] [--civ N]         # text → candidate IDs, or the whole table
 newage-cli list <kind> [--civ N] [--owner-civ N] [--all] [--limit N --offset N]
-newage-cli get <kind> <id>... [--civ N|all] [--fields KEY,KEY,cost*] [--compact]
+newage-cli get <kind> <id>... [--civ N] [--fields KEY,KEY,cost*] [--compact]
 newage-cli batch FILE|-                            # several read requests, one load
 newage-cli set <kind> <id> KEY=VALUE... --mod M [--civ N] [--expect KEY=VALUE...] [--dry-run]
 newage-cli apply PATCH.json --mod M [--dry-run]
@@ -135,7 +135,9 @@ newage-cli diff --against-game                     # phase 3: what the mod chang
 - `list` hides inactive rows (empty unit slots, techs the civ can't research) unless `--all`, mirroring the GUI options. `--owner-civ N` lists techs whose `Civ` is N, which is how "the Spanish techs" (unique techs and civ bonuses) are found.
 - `list unit` needs `--civ`. `list tech` takes an optional `--civ`: with it, techs that civ can't research are inactive; without it, no tech is hidden. `--owner-civ` (`-1` for techs any civ can research) is for techs only, and `civ` and `effect` take neither option. A civ or owner civ out of range is `unknown_entity` with kind `civ`.
 - `list` returns `{"kind", "civ"?, "ownerCiv"?, "all"?, "offset", "limit"?, "total", "items"}`. Items are in ID order with `id`, `name` and `internalName`; tech items also have `ownerCiv`. With `--all`, items whose activity is known (units, and techs when a civ is given) have `active`. `total` counts the rows that pass the filters, before `--offset` and `--limit`, so an agent can page. In a request the options are `civ`, `ownerCiv`, `all` (bool), `offset` and `limit` (non-negative ints).
-- `get` takes several IDs, so related entities come back in one call and one load.
+- `get` takes several IDs, so related entities come back in one call and one load. Items come back in the order of the IDs, duplicates included. The civ rules are those of `list`: units need `--civ`, techs take an optional one, which adds `active` (whether that civ can research the tech), and `civ` and `effect` take none. Unit labels in tech and effect fields name the given civ's copy, else civ 0's.
+- `get` fails as a whole when one ID is bad: out of range is `unknown_entity`, an empty unit slot `inactive_entity`. `--fields` (`"fields"` in a request) takes keys and `*` patterns; fields come back in descriptor order. A pattern that matches no key in the kind's `schema` is `unknown_field`; one that matches only fields this entity lacks (a conditional field, a command number past the effect's last) is not an error. Effect command patterns are checked against the `commandN.*` templates, so `command3.amount` and `command1.*` are known keys. Civs have no fields yet, so `get civ` returns only names.
+- In a request: `{"op": "get", "kind": "unit", "ids": [4], "civ": 1, "fields": ["hit_points", "cost*"], "compact": true}`. `ids` is a non-empty array of ints.
 - `set` checks every assignment before changing anything and saves once. Writing the current value is reported as unchanged and doesn't count as an edit.
 - `--expect` is compare-and-set: if a current value differs from the expected one, nothing is written and the command fails with `conflict`. The skill tells agents to pass the values they read, so a change made in between (in the GUI, or by another agent) isn't silently lost.
 - `--dry-run` validates and reports the changes without saving.
@@ -194,19 +196,25 @@ newage-cli lookup resource                 # the whole table: 0 Food Storage, 1 
 
 ```json
 {
-  "kind": "unit", "id": 4, "civ": 1,
-  "name": "Archer", "internalName": "ARCHR", "active": true,
-  "fields": [
-    {"key": "hit_points", "name": "Hit points", "group": "Stats", "type": "int", "value": 30, "editable": true, "min": -32768, "max": 32767},
-    {"key": "cost1.resource", "name": "Cost 1 resource", "group": "Costs", "type": "int", "value": 1, "labelKind": "resource", "label": "Wood Storage", "editable": true, "min": -32768, "max": 32767},
-    {"key": "cost1.amount", "name": "Cost 1 amount", "group": "Costs", "type": "int", "value": 25, "editable": true, "min": -32768, "max": 32767}
+  "kind": "unit", "civ": 1,
+  "items": [
+    {
+      "id": 4, "name": "Archer", "internalName": "ARCHR",
+      "fields": [
+        {"key": "hit_points", "name": "Hit points", "group": "Stats", "type": "int", "value": 30, "editable": true, "min": -32768, "max": 32767},
+        {"key": "cost1.resource", "name": "Cost 1 resource", "group": "Costs", "type": "int", "value": 1, "labelKind": "resource", "label": "Wood Storage", "editable": true, "min": -32768, "max": 32767},
+        {"key": "cost1.amount", "name": "Cost 1 amount", "group": "Costs", "type": "int", "value": 25, "editable": true, "min": -32768, "max": 32767}
+      ]
+    }
   ]
 }
 ```
 
+- The result always has `items`, even for one ID, so one ID and several read the same way. Tech items have `active` when a civ is given.
 - `value` is always the stored number. `label` (reference fields) and `text` (string-ID fields) are annotations and are never accepted as input.
 - Floats use the shortest form that reads back as the same float (`0.2`), as `FieldTreeModel::displayText` does, so writing back what was read changes nothing.
-- `--compact` returns `"fields": {"hit_points": 30, ...}` for bulk reads.
+- `--compact` returns each item's `"fields": {"hit_points": 30, ...}` for bulk reads.
+- `label` is left out when the reference has no name (`-1`, or a missing entity); `labelKind` stays.
 
 `set` and `apply` result:
 
