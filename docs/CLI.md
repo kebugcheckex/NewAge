@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get` and `batch` with shared source options; `cli_test` and `cli_process_test` check their JSON output. `mods list` is not built yet.
+Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is not measured yet.
 
 ## 1. Goal
 
@@ -284,6 +284,29 @@ A result's `changes` list converts directly back into a patch (`old` as `expect`
 - Source options (`--game`, `--mod`, `--dat`, ...) apply to the whole batch. Per-request options such as `civ` go inside each request; `--civ` and the other command options are rejected on `batch`.
 - Requests are checked before the data is opened. A request that isn't an object, has an unknown op, or is itself a `batch` is `usage` in its place. When no request passes those checks, the data isn't opened.
 - As a handler request (for a future `serve` mode): `{"op": "batch", "requests": [...]}`.
+
+### 6.5 `mods list`
+
+`mods list` lists the mods of the chosen data set without loading its data, so it is quick even on DE. The mods folder is `--mods-folder` (or `NEWAGE_MODS_FOLDER`) when given, else the first of `modsFolders()`: `<game>/mods` for HD, and for DE the `mods/local` folder of the profile the game has used for mods, else the most recently changed one. This is the folder `--mod NAME` is matched in.
+
+```json
+{
+  "game": "C:/Games/AoE2DE",
+  "dataset": "empires2_x2_p1.dat",
+  "modsFolder": "C:/Users/.../Games/Age of Empires 2 DE/76561198000000000/mods/local",
+  "otherModsFolders": ["C:/Users/.../Games/Age of Empires 2 DE/0/mods/local"],
+  "mods": [
+    {"title": "Balance", "dir": "C:/Users/.../mods/local/Balance", "author": "Me", "description": "Cheaper archers", "hasDat": true}
+  ]
+}
+```
+
+- `mods` are sorted by title. The title comes from the mod's `info.json`, else its folder name; `author` and `description` are empty strings when it has none.
+- `hasDat` says whether the mod has its own copy of this data set's `.dat`. A write to a mod without one starts from the game's data, so it depends on the data set: an HD mod may have the HD `.dat` and not the Conquerors one.
+- `otherModsFolders` lists the other folders found (DE profiles, or the detected folder when `--mods-folder` points elsewhere). It is left out when there are none. When DE has no profile with a mods folder, `modsFolder` is empty, `mods` is empty and a warning says to pass `--mods-folder`.
+- A loose `.dat` or a data set without mods (the CD-era games) is `mods_unsupported`; a missing game folder or data set is `no_dataset`. Both exit 2.
+- `--mod` and the command options are rejected; `NEWAGE_MOD` is ignored, since the skill often sets it.
+- As a handler request: `{"op": "mods-list"}`. It can't be in a `batch`, which is for reads of the loaded data.
 
 ## 7. Civs and units
 

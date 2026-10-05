@@ -85,6 +85,23 @@ const GameDataset *selectDataset(const QList<GameDataset> &datasets, const QStri
     return nullptr;
 }
 
+// The data set `source` names in its game folder, or the no_dataset error.
+std::optional<ServiceError> chooseDataset(const DataSource &source, GameDataset &out)
+{
+    if (source.gameDir.isEmpty())
+        return makeError(QStringLiteral("no_dataset"), QStringLiteral("No game folder or data file."));
+    const QList<GameDataset> datasets = detectInstall(source.gameDir, source.locale);
+    if (datasets.isEmpty())
+        return makeError(QStringLiteral("no_dataset"),
+                         QStringLiteral("No data set in %1.").arg(QDir::toNativeSeparators(source.gameDir)));
+    const GameDataset *chosen = selectDataset(datasets, source.dataset);
+    if (!chosen)
+        return makeError(QStringLiteral("no_dataset"),
+                         QStringLiteral("No data set named \"%1\".").arg(QFileInfo(source.dataset).fileName()));
+    out = *chosen;
+    return std::nullopt;
+}
+
 struct FixedTable
 {
     QLatin1StringView key;
@@ -222,6 +239,46 @@ DataSource resolveSource(DataSource source)
     return source;
 }
 
+ModsResult listMods(const DataSource &source)
+{
+    ModsResult result;
+    if (!source.datPath.isEmpty())
+    {
+        result.error = makeError(QStringLiteral("mods_unsupported"), QStringLiteral("A loose data file has no mods."));
+        return result;
+    }
+    DataSource in = source;
+    if (in.locale.isEmpty())
+        in.locale = QStringLiteral("en");
+    if (const std::optional<ServiceError> error = chooseDataset(in, result.dataset))
+    {
+        result.error = *error;
+        return result;
+    }
+    if (!supportsMods(result.dataset))
+    {
+        result.error = makeError(QStringLiteral("mods_unsupported"), QStringLiteral("This data set has no mods."));
+        return result;
+    }
+
+    QStringList folders;
+    for (const QString &folder : modsFolders(result.dataset))
+        folders.append(QDir::cleanPath(folder));
+    if (!in.modsFolder.isEmpty())
+    {
+        const QString chosen = QDir::cleanPath(QFileInfo(in.modsFolder).absoluteFilePath());
+        folders.removeAll(chosen);
+        folders.prepend(chosen);
+    }
+    if (!folders.isEmpty())
+        result.modsFolder = folders.takeFirst();
+    result.otherModsFolders = folders;
+    for (const Mod &mod : findMods(result.modsFolder))
+        result.mods.append({mod, QFileInfo::exists(modDatPath(result.dataset, mod.dir))});
+    result.ok = true;
+    return result;
+}
+
 void DataService::close()
 {
     session_.close();
@@ -267,18 +324,8 @@ OpenResult DataService::open(const DataSource &source)
         return result;
     }
 
-    if (in.gameDir.isEmpty())
-        return fail(QStringLiteral("no_dataset"), QStringLiteral("No game folder or data file."));
-
-    const QList<GameDataset> datasets = detectInstall(in.gameDir, in.locale);
-    if (datasets.isEmpty())
-        return fail(QStringLiteral("no_dataset"),
-                    QStringLiteral("No data set in %1.").arg(QDir::toNativeSeparators(in.gameDir)));
-    const GameDataset *chosen = selectDataset(datasets, in.dataset);
-    if (!chosen)
-        return fail(QStringLiteral("no_dataset"),
-                    QStringLiteral("No data set named \"%1\".").arg(QFileInfo(in.dataset).fileName()));
-    gameDataset_ = *chosen;
+    if (const std::optional<ServiceError> error = chooseDataset(in, gameDataset_))
+        return fail(error->code, error->message);
 
     GameDataset opened = gameDataset_;
     if (!in.mod.isEmpty())

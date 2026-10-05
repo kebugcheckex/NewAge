@@ -32,7 +32,9 @@ struct HandlerResult
 // `{"op": "batch", "requests": [...]}`, whose requests are read ops. A batch
 // result is `{"results": [...], "failed": N}`: each request's body in its
 // place, errors included, and how many failed. It exits 0 unless the batch
-// itself is malformed or the data can't be opened.
+// itself is malformed or the data can't be opened. `{"op": "mods-list"}`
+// lists the data set's mods without loading the data, ignores the source's
+// mod, and can't be in a batch.
 // Source options stay on `source`, not in the request, because a batch
 // shares one open. Empty game, dataset, mod and mods-folder fields are filled
 // from the environment before opening.

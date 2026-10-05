@@ -8,6 +8,7 @@
 #include <QVariant>
 
 #include "core/GameInstall.h"
+#include "core/Mods.h"
 #include "core/Session.h"
 #include "model/EntityKind.h"
 
@@ -157,6 +158,33 @@ struct GetResult
     ServiceError error;
     QList<GetItem> items;
 };
+
+// A mod `listMods` found. `hasDat` is whether it has its own copy of the
+// data set's .dat; a write to a mod without one starts from the game's data.
+struct ModEntry
+{
+    Mod mod;
+    bool hasDat = false;
+};
+
+// `modsFolder` is where mod names are matched: `DataSource::modsFolder` when
+// set, else the first of modsFolders(). It is empty when DE has no profile
+// with a mods folder. `otherModsFolders` are the other detected folders.
+// `mods` are sorted by title.
+struct ModsResult
+{
+    bool ok = false;
+    ServiceError error;
+    GameDataset dataset;
+    QString modsFolder;
+    QStringList otherModsFolders;
+    QList<ModEntry> mods;
+};
+
+// The mods of the data set `source` names, without loading any data.
+// `source.mod` is ignored. A loose file, or a data set without mods, is
+// mods_unsupported; a missing game folder or data set is no_dataset.
+ModsResult listMods(const DataSource &source);
 
 struct OpenResult
 {

@@ -181,24 +181,33 @@ int main(int argc, char *argv[])
         if (positional.size() != 2)
             return usage(QStringLiteral("Expected batch FILE|-."));
     }
+    else if (command == QStringLiteral("mods"))
+    {
+        if (positional.size() != 2 || positional.at(1) != QStringLiteral("list"))
+            return usage(QStringLiteral("Expected mods list."));
+        if (parser.isSet(mod))
+            return usage(QStringLiteral("--mod is not used by mods list."));
+    }
     else
     {
         return usage(QStringLiteral("Expected info, schema [kind], lookup <table> [TEXT], list <kind>, "
-                                    "get <kind> <id>... or batch FILE|-."));
+                                    "get <kind> <id>..., batch FILE|- or mods list."));
     }
+    // How messages name the command: "mods list", not "mods".
+    const QString commandName = command == QStringLiteral("mods") ? QStringLiteral("mods list") : command;
     const bool lists = command == QStringLiteral("list");
     const bool gets = command == QStringLiteral("get");
     if (parser.isSet(civ) && command != QStringLiteral("lookup") && !lists && !gets)
-        return usage(QStringLiteral("--civ is not used by %1.").arg(command));
+        return usage(QStringLiteral("--civ is not used by %1.").arg(commandName));
     for (const QCommandLineOption &option : {ownerCiv, all, limit, offset})
     {
         if (parser.isSet(option) && !lists)
-            return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), command));
+            return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), commandName));
     }
     for (const QCommandLineOption &option : {fields, compact})
     {
         if (parser.isSet(option) && !gets)
-            return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), command));
+            return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), commandName));
     }
     if (parser.isSet(dat) && (parser.isSet(game) || parser.isSet(dataset)))
         return usage(QStringLiteral("--dat cannot be combined with --game or --dataset."));
@@ -216,7 +225,7 @@ int main(int argc, char *argv[])
         source.locale = parser.value(locale);
 
     QJsonObject request;
-    request.insert(QStringLiteral("op"), command);
+    request.insert(QStringLiteral("op"), command == QStringLiteral("mods") ? QStringLiteral("mods-list") : command);
     if (command == QStringLiteral("schema") && positional.size() == 2)
         request.insert(QStringLiteral("kind"), positional.at(1));
     if (command == QStringLiteral("lookup"))

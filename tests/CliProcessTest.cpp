@@ -1,4 +1,6 @@
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -71,6 +73,8 @@ private slots:
     void getReadsLooseFile();
     void batchRejectsBadInput();
     void batchReadsFileAndStdin();
+    void modsListRejectsBadInput();
+    void modsListReadsGameFolder();
 };
 
 void CliProcessTest::missingCommandIsJsonUsage()
@@ -294,6 +298,52 @@ void CliProcessTest::batchReadsFileAndStdin()
                  QStringLiteral("usage"));
     }
     QCOMPARE(fromFile.body, fromStdin.body);
+}
+
+void CliProcessTest::modsListRejectsBadInput()
+{
+    const QList<Response> responses = {
+        run({QStringLiteral("mods")}),
+        run({QStringLiteral("mods"), QStringLiteral("create")}),
+        run({QStringLiteral("mods"), QStringLiteral("list"), QStringLiteral("extra")}),
+        run({QStringLiteral("mods"), QStringLiteral("list"), QStringLiteral("--mod"), QStringLiteral("Balance")}),
+        run({QStringLiteral("mods"), QStringLiteral("list"), QStringLiteral("--civ"), QStringLiteral("1")}),
+    };
+    for (const Response &response : responses)
+    {
+        QCOMPARE(response.exitCode, 1);
+        QCOMPARE(errorCode(response), QStringLiteral("usage"));
+    }
+    QVERIFY(responses.at(4).body.value(QStringLiteral("error")).toObject().value(QStringLiteral("message"))
+                .toString()
+                .contains(QStringLiteral("mods list")));
+}
+
+// An HD folder with empty .dat files: mods list reads none of them.
+void CliProcessTest::modsListReadsGameFolder()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    for (const QString &relative : {QStringLiteral("resources/_common/dat/empires2_x2_p1.dat"),
+                                    QStringLiteral("resources/_common/dat/empires2_x1_p1.dat"),
+                                    QStringLiteral("mods/Balance/info.json")})
+    {
+        const QString path = game.filePath(relative);
+        QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        if (relative.endsWith(QStringLiteral(".json")))
+            file.write(R"({"Title": "Balance", "Author": "Me"})");
+    }
+
+    const Response response = run({QStringLiteral("--game"), game.path(), QStringLiteral("mods"), QStringLiteral("list")});
+    QCOMPARE(response.exitCode, 0);
+    QVERIFY(response.error.isEmpty());
+    const QJsonArray mods = response.body.value(QStringLiteral("mods")).toArray();
+    QCOMPARE(mods.size(), 1);
+    QCOMPARE(mods.at(0).toObject().value(QStringLiteral("title")).toString(), QStringLiteral("Balance"));
+    QCOMPARE(mods.at(0).toObject().value(QStringLiteral("author")).toString(), QStringLiteral("Me"));
+    QCOMPARE(mods.at(0).toObject().value(QStringLiteral("hasDat")).toBool(), false);
 }
 
 QTEST_GUILESS_MAIN(CliProcessTest)

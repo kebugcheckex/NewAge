@@ -535,6 +535,11 @@ HandlerResult handleBatch(const DataSource &source, const QJsonObject &request)
             results[i] = usage(QStringLiteral("A batch cannot contain a batch."));
             continue;
         }
+        if (value.toObject().value(QStringLiteral("op")) == QStringLiteral("mods-list"))
+        {
+            results[i] = usage(QStringLiteral("mods-list reads no data and cannot be in a batch."));
+            continue;
+        }
         Prepared ready;
         if (const std::optional<HandlerResult> bad = prepare(value.toObject(), ready))
             results[i] = *bad;
@@ -572,6 +577,42 @@ HandlerResult handleBatch(const DataSource &source, const QJsonObject &request)
     return succeeded(body, warnings);
 }
 
+// Lists mods without opening the data, so it is quick even on DE.
+HandlerResult handleModsList(const DataSource &source)
+{
+    const ModsResult found = listMods(source);
+    if (!found.ok)
+        return failed(found.error);
+
+    QJsonArray mods;
+    for (const ModEntry &entry : found.mods)
+    {
+        QJsonObject item;
+        item.insert(QStringLiteral("title"), entry.mod.info.title);
+        item.insert(QStringLiteral("dir"), jsonPath(entry.mod.dir));
+        item.insert(QStringLiteral("author"), entry.mod.info.author);
+        item.insert(QStringLiteral("description"), entry.mod.info.description);
+        item.insert(QStringLiteral("hasDat"), entry.hasDat);
+        mods.append(item);
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("game"), jsonPath(found.dataset.gameDir));
+    body.insert(QStringLiteral("dataset"), QFileInfo(found.dataset.datPath).fileName());
+    body.insert(QStringLiteral("modsFolder"), jsonPath(found.modsFolder));
+    if (!found.otherModsFolders.isEmpty())
+    {
+        QJsonArray others;
+        for (const QString &folder : found.otherModsFolders)
+            others.append(jsonPath(folder));
+        body.insert(QStringLiteral("otherModsFolders"), others);
+    }
+    body.insert(QStringLiteral("mods"), mods);
+    QStringList warnings;
+    if (found.modsFolder.isEmpty())
+        warnings.append(QStringLiteral("No mods folder found; pass --mods-folder."));
+    return succeeded(body, warnings);
+}
+
 } // namespace
 
 int exitCodeFor(const QString &code)
@@ -600,6 +641,8 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
 {
     if (request.value(QStringLiteral("op")) == QStringLiteral("batch"))
         return handleBatch(source, request);
+    if (request.value(QStringLiteral("op")) == QStringLiteral("mods-list"))
+        return handleModsList(resolveSource(source));
 
     Prepared prepared;
     if (const std::optional<HandlerResult> bad = prepare(request, prepared))

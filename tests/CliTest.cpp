@@ -117,6 +117,20 @@ QString errorCode(const QJsonValue &body)
     return body.toObject().value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString();
 }
 
+// An HD game folder whose .dat files are empty, so any load fails. Its mods
+// folder has Balance, with its own copy of the HD .dat, and Empty, without.
+bool makeModdedGame(const QTemporaryDir &game)
+{
+    if (!writeFile(game.path(), QStringLiteral("resources/_common/dat/empires2_x2_p1.dat"))
+        || !writeFile(game.path(), QStringLiteral("resources/_common/dat/empires2_x1_p1.dat")))
+        return false;
+    const QString folder = game.filePath(QStringLiteral("mods"));
+    const QString balance =
+        createMod(folder, {QStringLiteral("Balance"), QStringLiteral("Me"), QStringLiteral("Cheaper archers")});
+    return !balance.isEmpty() && writeFile(balance, QStringLiteral("resources/_common/dat/empires2_x2_p1.dat"))
+           && !createMod(folder, {QStringLiteral("Empty"), {}, {}}).isEmpty();
+}
+
 } // namespace
 
 class CliTest : public QObject
@@ -164,6 +178,11 @@ private slots:
     void batchChecksRequestsBeforeOpen();
     void batchOpenFailureFailsWhole();
     void batchRunsEachRequestInPlace();
+    void batchRejectsModsList();
+    void modsListReadsNoData();
+    void modsListFolderOverride();
+    void modsListFails_data();
+    void modsListFails();
 };
 
 void CliTest::init()
@@ -1178,6 +1197,124 @@ void CliTest::batchRunsEachRequestInPlace()
     QCOMPARE(errorCode(results.at(2)), QStringLiteral("usage"));
     QCOMPARE(errorCode(results.at(4)), QStringLiteral("unknown_entity"));
     QCOMPARE(results.at(3).toObject().value(QStringLiteral("items")).toArray().size(), 2);
+}
+
+void CliTest::batchRejectsModsList()
+{
+    DataSource source;
+    source.datPath = QStringLiteral("missing.dat");
+    source.versionKey = QStringLiteral("tc");
+    const HandlerResult result = RequestHandler().handle(source, batch({op(QStringLiteral("mods-list"))}));
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("failed")).toInt(), 1);
+    QCOMPARE(errorCode(result.body.value(QStringLiteral("results")).toArray().at(0)), QStringLiteral("usage"));
+}
+
+// The game's .dat files are empty, so this passes only if nothing is loaded.
+// The source's mod is ignored, because NEWAGE_MOD is often set.
+void CliTest::modsListReadsNoData()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeModdedGame(game));
+
+    DataSource source;
+    source.gameDir = game.path();
+    source.mod = QStringLiteral("Missing");
+    const HandlerResult result = RequestHandler().handle(source, op(QStringLiteral("mods-list")));
+    if (result.exitCode != 0)
+        QFAIL(qPrintable(result.body.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString()));
+    QVERIFY(result.warnings.isEmpty());
+    QCOMPARE(result.body.value(QStringLiteral("game")).toString(), forwardPath(QDir(game.path()).absolutePath()));
+    QCOMPARE(result.body.value(QStringLiteral("dataset")).toString(), QStringLiteral("empires2_x2_p1.dat"));
+    QCOMPARE(result.body.value(QStringLiteral("modsFolder")).toString(),
+             forwardPath(game.filePath(QStringLiteral("mods"))));
+    QVERIFY(!result.body.contains(QStringLiteral("otherModsFolders")));
+
+    const QJsonArray mods = result.body.value(QStringLiteral("mods")).toArray();
+    QCOMPARE(mods.size(), 2);
+    const QJsonObject balance = mods.at(0).toObject();
+    QCOMPARE(balance.value(QStringLiteral("title")).toString(), QStringLiteral("Balance"));
+    QCOMPARE(balance.value(QStringLiteral("dir")).toString(),
+             forwardPath(game.filePath(QStringLiteral("mods/Balance"))));
+    QCOMPARE(balance.value(QStringLiteral("author")).toString(), QStringLiteral("Me"));
+    QCOMPARE(balance.value(QStringLiteral("description")).toString(), QStringLiteral("Cheaper archers"));
+    QCOMPARE(balance.value(QStringLiteral("hasDat")).toBool(), true);
+    const QJsonObject empty = mods.at(1).toObject();
+    QCOMPARE(empty.value(QStringLiteral("title")).toString(), QStringLiteral("Empty"));
+    QCOMPARE(empty.value(QStringLiteral("author")).toString(), QString());
+    QCOMPARE(empty.value(QStringLiteral("hasDat")).toBool(), false);
+
+    // hasDat follows the data set: Balance has no copy of the TC .dat.
+    source.dataset = QStringLiteral("empires2_x1_p1.dat");
+    const HandlerResult tc = RequestHandler().handle(source, op(QStringLiteral("mods-list")));
+    QCOMPARE(tc.exitCode, 0);
+    QCOMPARE(tc.body.value(QStringLiteral("dataset")).toString(), QStringLiteral("empires2_x1_p1.dat"));
+    QCOMPARE(tc.body.value(QStringLiteral("mods")).toArray().at(0).toObject().value(QStringLiteral("hasDat")).toBool(),
+             false);
+}
+
+void CliTest::modsListFolderOverride()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeModdedGame(game));
+    QTemporaryDir other;
+    QVERIFY(other.isValid());
+    QVERIFY(!createMod(other.path(), {QStringLiteral("Elsewhere"), {}, {}}).isEmpty());
+
+    qputenv("NEWAGE_MODS_FOLDER", other.path().toUtf8());
+    DataSource source;
+    source.gameDir = game.path();
+    const HandlerResult result = RequestHandler().handle(source, op(QStringLiteral("mods-list")));
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("modsFolder")).toString(), forwardPath(other.path()));
+    QCOMPARE(result.body.value(QStringLiteral("otherModsFolders")).toArray(),
+             QJsonArray({forwardPath(game.filePath(QStringLiteral("mods")))}));
+    const QJsonArray mods = result.body.value(QStringLiteral("mods")).toArray();
+    QCOMPARE(mods.size(), 1);
+    QCOMPARE(mods.at(0).toObject().value(QStringLiteral("title")).toString(), QStringLiteral("Elsewhere"));
+}
+
+void CliTest::modsListFails_data()
+{
+    QTest::addColumn<QString>("layout");
+    QTest::addColumn<QString>("dataset");
+    QTest::addColumn<bool>("loose");
+    QTest::addColumn<QString>("code");
+    QTest::newRow("no source") << QString() << QString() << false << QStringLiteral("no_dataset");
+    QTest::newRow("no data set") << QStringLiteral("readme.txt") << QString() << false << QStringLiteral("no_dataset");
+    QTest::newRow("unknown data set") << QStringLiteral("resources/_common/dat/empires2_x2_p1.dat")
+                                      << QStringLiteral("missing.dat") << false << QStringLiteral("no_dataset");
+    QTest::newRow("cd install") << QStringLiteral("data/empires2_x1_p1.dat") << QString() << false
+                                << QStringLiteral("mods_unsupported");
+    QTest::newRow("loose file") << QString() << QString() << true << QStringLiteral("mods_unsupported");
+}
+
+void CliTest::modsListFails()
+{
+    QFETCH(QString, layout);
+    QFETCH(QString, dataset);
+    QFETCH(bool, loose);
+    QFETCH(QString, code);
+
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    DataSource source;
+    if (!layout.isEmpty())
+    {
+        QVERIFY(writeFile(game.path(), layout));
+        source.gameDir = game.path();
+        source.dataset = dataset;
+    }
+    if (loose)
+    {
+        source.datPath = kTcDat;
+        source.versionKey = QStringLiteral("tc");
+    }
+    const HandlerResult result = RequestHandler().handle(source, op(QStringLiteral("mods-list")));
+    QCOMPARE(result.exitCode, 2);
+    QCOMPARE(errorCode(result), code);
 }
 
 QTEST_GUILESS_MAIN(CliTest)
