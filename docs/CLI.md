@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type and effect command Mode, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is not measured yet.
+Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type and effect command Mode, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 is done: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is measured in section 3. P2 (writes) is next.
 
 ## 1. Goal
 
@@ -37,7 +37,7 @@ The CLI keeps the GUI's guarantees: the same fields, the same range checks, unit
 - **Entity logic lives in Qt list models.** The label rule, whether a slot is in use, tech availability, the writers and the reference naming sit in `UnitListModel`, `TechListModel` and `EffectListModel`. The reference-naming switch is written out three times.
 - **Value parsing is private to `FieldTreeModel`** (`parseValue`) and reports only success or failure, not why.
 - **Effects are read-only** in the GUI, so they are read-only in the CLI until the GUI can edit them.
-- **Every CLI call reloads the `.dat`.** For DE that takes a noticeable time (to be measured). Section 6.4 (`batch`) reduces the number of loads an agent needs, without a long-running process.
+- **Every CLI call reloads the `.dat`.** Measured on 2026-10-04 against AoE2 DE's `empires2_x2_p1.dat` (12 MB, `VER 8.9`) on an i7-12700F from an NVMe SSD, with the file in the OS cache, median of 5 runs: a Release `newage-cli info` takes about 1.2 s, `get` the same, and a Debug build about 4.2 s. Nearly all of it is reading the `.dat`: a loose-file `--dat` open without language strings takes the same 1.2 s, and `mods list`, which loads no data, 18 ms. A `batch` of 10 `get` requests also takes 1.2 s, so section 6.4 (`batch`) keeps an agent's work at one load per step without a long-running process. A cold first read was not measured.
 
 ## 4. Architecture
 
@@ -165,7 +165,6 @@ newage-cli lookup resource                 # the whole table: 0 Food Storage, 1 
 
 - Tables: `civ`, `unit`, `tech`, `effect` (data) and `resource`, `unit-class`, `attribute`, `effect-type`, `unit-type`, `tech-type`, `resource-mode`, `tech-modifier-mode`, `enable-mode`, `upgrade-mode` (fixed lists from `ResourceNames`, `EffectNames` and friends). Every `labelKind` that isn't a data kind is one of these tables.
 - The mode tables label an effect command's `mode` field, whose label kind depends on the command type: `resource-mode` (Resource Modifier: 0 Set, else +/-), `tech-modifier-mode` (Tech Cost and Tech Time Modifier: 0 Set, 2 Multiply in DE, else +/-), `enable-mode` (Enable/Disable Unit: 0 Disable, else Enable) and `upgrade-mode` (DE Upgrade Unit: -1 All, else On map). They list the values the data uses, but every value gets a label, because the games treat any other value alike: DE data uses -1 for adding and for enabling.
-- Matching is case-insensitive on the language name and the internal name; exact matches first, then prefix, then substring. With no `TEXT`, the whole table is returned.
 - Matching is case-insensitive on the language name and the internal name; exact matches first, then prefix, then substring. With no `TEXT`, the whole table is returned.
 - Civs have only internal names in the `.dat` (`Civ::Name`); civ language names are a later addition.
 - `unit` needs `--civ` (`"civ"` in a request) and leaves out empty unit slots; the other tables reject `--civ`. A civ out of range is `unknown_entity` with kind `civ`; an unknown table is `unknown_kind`.
@@ -389,7 +388,7 @@ Field coverage (section 8) grows alongside, in the GUI and the CLI together.
 
 Not in this plan, but the design leaves room for each:
 
-- **Persistent session and MCP.** `RequestHandler` already takes JSON requests, so a `newage-cli serve` (one request per line on stdin, data kept in memory, explicit `save`) or an MCP server over stdio would be another front end, not a rewrite. Revisit if load time makes one load per call too slow even with `batch`, or if a host needs MCP rather than a shell.
+- **Persistent session and MCP.** `RequestHandler` already takes JSON requests, so a `newage-cli serve` (one request per line on stdin, data kept in memory, explicit `save`) or an MCP server over stdio would be another front end, not a rewrite. Revisit if load time makes one load per call too slow even with `batch` (about 1.2 s per load on DE, section 3), or if a host needs MCP rather than a shell.
 - **All-civs unit writes** (section 7), with a rule for civs whose value already differs.
 - **Using the GUI's last game folder and mod** from `QSettings` as defaults for the CLI.
 - **Writing original game files**, which would at least need a backup and restore story. Out of scope.
