@@ -341,6 +341,8 @@ The CLI reads and writes exactly what the descriptor tables describe, so the GUI
 
 A skill file teaches an agent when and how to use `newage-cli`. It lives in the repo at `skill/newage-data/SKILL.md`, ships next to the executable, and is installed by copying it to `~/.claude/skills/newage-data/` (or a project's `.claude/skills/`). It stays short and leaves the details to `schema` and `lookup`, so it doesn't go stale as fields are added.
 
+The file in the repo covers P1: the read commands, and that agents describe a change for the user to make in the GUI rather than writing. P2 adds the write rules from the outline below.
+
 Draft outline:
 
 ```markdown
