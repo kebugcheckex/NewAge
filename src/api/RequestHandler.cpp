@@ -125,6 +125,10 @@ QString labelKindName(RefKind kind)
     case RefKind::UnitType: return QStringLiteral("unit-type");
     case RefKind::TechType: return QStringLiteral("tech-type");
     case RefKind::EffectType: return QStringLiteral("effect-type");
+    case RefKind::ResourceMode: return QStringLiteral("resource-mode");
+    case RefKind::TechModifierMode: return QStringLiteral("tech-modifier-mode");
+    case RefKind::EnableMode: return QStringLiteral("enable-mode");
+    case RefKind::UpgradeMode: return QStringLiteral("upgrade-mode");
     }
     return {};
 }

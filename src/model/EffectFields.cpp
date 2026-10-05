@@ -145,27 +145,11 @@ void appendTechId(QList<FieldDesc<EffectRef>> &list, const QString &group, int c
     list.append(std::move(field));
 }
 
-enum class ModeKind { SetOrAdd, Enable, OnMap };
-
-void appendMode(QList<FieldDesc<EffectRef>> &list, const QString &group, int command, Slot slot, ModeKind kind)
+// `kind` is RefKind::ResourceMode, TechModifierMode, EnableMode or
+// UpgradeMode.
+void appendMode(QList<FieldDesc<EffectRef>> &list, const QString &group, int command, Slot slot, RefKind kind)
 {
-    list.append({commandKey(command, QStringLiteral("mode")), QStringLiteral("Mode"), group, {},
-                 [command, slot, kind](const EffectRef &effect) {
-                     const int mode = slotValue(effect, command, slot).toInt();
-                     switch (kind)
-                     {
-                     case ModeKind::Enable:
-                         return QVariant(mode == 0 ? QStringLiteral("0 - Disable")
-                                                   : QStringLiteral("%1 - Enable").arg(mode));
-                     case ModeKind::OnMap:
-                         return QVariant(mode == -1 ? QStringLiteral("-1 - All")
-                                                    : QStringLiteral("%1 - On map").arg(mode));
-                     case ModeKind::SetOrAdd:
-                         return QVariant(mode == 0 ? QStringLiteral("0 - Set") : QStringLiteral("%1 - +/-").arg(mode));
-                     }
-                     return QVariant();
-                 }});
-    list.last().typeId = QMetaType::QString;
+    appendSlot(list, group, command, "mode", "Mode", slot, kind, false);
 }
 
 void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, genie::GameVersion version)
@@ -198,20 +182,20 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
         break;
     case 1:
         appendSlot(list, group, command, "resource", "Resource", Slot::A, RefKind::Resource);
-        appendMode(list, group, command, Slot::B, ModeKind::SetOrAdd);
+        appendMode(list, group, command, Slot::B, RefKind::ResourceMode);
         if (isAoE2DE(version))
             appendSlot(list, group, command, "multiply_resource", "Multiply resource", Slot::C, RefKind::Resource);
         appendSlot(list, group, command, "amount", "Amount", Slot::D, RefKind::None, false);
         break;
     case 2:
         appendSlot(list, group, command, "unit", "Unit", Slot::A, RefKind::Unit);
-        appendMode(list, group, command, Slot::B, ModeKind::Enable);
+        appendMode(list, group, command, Slot::B, RefKind::EnableMode);
         break;
     case 3:
         appendSlot(list, group, command, "unit", "Unit", Slot::A, RefKind::Unit);
         appendSlot(list, group, command, "to_unit", "To unit", Slot::B, RefKind::Unit);
         if (isAoE2DE(version))
-            appendMode(list, group, command, Slot::C, ModeKind::OnMap);
+            appendMode(list, group, command, Slot::C, RefKind::UpgradeMode);
         break;
     case 6:
         appendSlot(list, group, command, "resource", "Resource", Slot::A, RefKind::Resource);
@@ -230,7 +214,7 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
     case 101:
         appendSlot(list, group, command, "tech", "Tech", Slot::A, RefKind::Tech);
         appendSlot(list, group, command, "resource", "Resource", Slot::B, RefKind::Resource);
-        appendMode(list, group, command, Slot::C, ModeKind::SetOrAdd);
+        appendMode(list, group, command, Slot::C, RefKind::TechModifierMode);
         appendSlot(list, group, command, "amount", "Amount", Slot::D, RefKind::None, false);
         break;
     case 102:
@@ -238,7 +222,7 @@ void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, gen
         break;
     case 103:
         appendSlot(list, group, command, "tech", "Tech", Slot::A, RefKind::Tech);
-        appendMode(list, group, command, Slot::C, ModeKind::SetOrAdd);
+        appendMode(list, group, command, Slot::C, RefKind::TechModifierMode);
         appendSlot(list, group, command, "amount", "Amount", Slot::D, RefKind::None, false);
         break;
     default:
@@ -268,6 +252,44 @@ QList<int> effectTypeIds(genie::GameVersion version)
             ids.append(type);
     }
     return ids;
+}
+
+QString effectModeName(genie::GameVersion version, RefKind kind, int mode)
+{
+    switch (kind)
+    {
+    case RefKind::TechModifierMode:
+        // DE data uses 2 for percentage changes (amount 0.75: 25% cheaper).
+        if (mode == 2 && isAoE2DE(version))
+            return QStringLiteral("Multiply");
+        [[fallthrough]];
+    case RefKind::ResourceMode:
+        return mode == 0 ? QStringLiteral("Set") : QStringLiteral("+/-");
+    case RefKind::EnableMode:
+        return mode == 0 ? QStringLiteral("Disable") : QStringLiteral("Enable");
+    case RefKind::UpgradeMode:
+        return mode == -1 ? QStringLiteral("All") : QStringLiteral("On map");
+    default:
+        return {};
+    }
+}
+
+QList<int> effectModeIds(genie::GameVersion version, RefKind kind)
+{
+    switch (kind)
+    {
+    case RefKind::TechModifierMode:
+        if (isAoE2DE(version))
+            return {0, 1, 2};
+        return {0, 1};
+    case RefKind::ResourceMode:
+    case RefKind::EnableMode:
+        return {0, 1};
+    case RefKind::UpgradeMode:
+        return {-1, 1};
+    default:
+        return {};
+    }
 }
 
 QList<FieldDesc<EffectRef>> effectFields(const genie::Effect &effect, genie::GameVersion version)

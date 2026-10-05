@@ -245,7 +245,7 @@ Each entity type has a descriptor table in `src/model/`; `FieldDesc<T>` in `Fiel
 - Planned: route edits through `QUndoStack` / `QUndoCommand` for undo/redo and modified-state tracking.
 - Planned: shared Add / Insert / Delete / Copy / Paste operations on entity lists.
 
-Techs and effects already reuse the shared browser. Effects are global (`DatFile::Effects`; the ID is the index), listed like techs, with one field group per command. Unused command slots (`-1`, usually Unit or Class) are left out; Amount, Mode and Modify Tech's Action keep `-1`. Class and attribute IDs show `name (ID)`. The goal for further entity types (graphics, sounds, civs...) is to add a descriptor table and list model while reusing the UI.
+Techs and effects already reuse the shared browser. Effects are global (`DatFile::Effects`; the ID is the index), listed like techs, with one field group per command. Unused command slots (`-1`, usually Unit or Class) are left out; Amount, Mode and Modify Tech's Action keep `-1`. Class and attribute IDs show `name (ID)`. Type and Mode are codes, the stored number with a label as AGE shows them (`102 - Disable Tech`, `2 - Multiply`); Mode's label kind depends on the command type. The goal for further entity types (graphics, sounds, civs...) is to add a descriptor table and list model while reusing the UI.
 
 ### M6: Mods (panel done)
 

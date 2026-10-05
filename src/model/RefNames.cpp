@@ -76,6 +76,11 @@ QString refName(const Session &session, RefKind kind, int id, int civ)
         return techTypeName(id);
     case RefKind::EffectType:
         return effectTypeName(session.gameVersion(), id);
+    case RefKind::ResourceMode:
+    case RefKind::TechModifierMode:
+    case RefKind::EnableMode:
+    case RefKind::UpgradeMode:
+        return effectModeName(session.gameVersion(), kind, id);
     }
     return {};
 }
@@ -104,6 +109,12 @@ QList<int> fixedRefIds(genie::GameVersion version, RefKind kind)
         break;
     case RefKind::EffectType:
         ids = effectTypeIds(version);
+        break;
+    case RefKind::ResourceMode:
+    case RefKind::TechModifierMode:
+    case RefKind::EnableMode:
+    case RefKind::UpgradeMode:
+        ids = effectModeIds(version, kind);
         break;
     case RefKind::None:
     case RefKind::Tech:

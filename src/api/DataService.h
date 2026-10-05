@@ -92,7 +92,8 @@ struct LookupResult
 };
 
 // Tables `lookup` accepts: the entity kinds in registry order, then the fixed
-// lists (resource, unit-class, attribute, effect-type, unit-type, tech-type).
+// lists (resource, unit-class, attribute, effect-type, unit-type, tech-type,
+// resource-mode, tech-modifier-mode, enable-mode, upgrade-mode).
 QStringList lookupTables();
 
 // What `list` returns. `civ` selects the unit copy (required for units) and,

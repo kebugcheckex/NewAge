@@ -116,6 +116,10 @@ constexpr FixedTable kFixedTables[] = {
     {QLatin1StringView("effect-type"), RefKind::EffectType},
     {QLatin1StringView("unit-type"), RefKind::UnitType},
     {QLatin1StringView("tech-type"), RefKind::TechType},
+    {QLatin1StringView("resource-mode"), RefKind::ResourceMode},
+    {QLatin1StringView("tech-modifier-mode"), RefKind::TechModifierMode},
+    {QLatin1StringView("enable-mode"), RefKind::EnableMode},
+    {QLatin1StringView("upgrade-mode"), RefKind::UpgradeMode},
 };
 
 const FixedTable *findFixedTable(const QString &key)

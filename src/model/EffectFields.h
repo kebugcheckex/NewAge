@@ -37,4 +37,15 @@ QString effectTypeName(genie::GameVersion version, int type);
 // doesn't call unknown.
 QList<int> effectTypeIds(genie::GameVersion version);
 
+// Label for an effect command Mode of `kind` (RefKind::ResourceMode,
+// TechModifierMode, EnableMode or UpgradeMode), without the number: "Set",
+// "+/-", "Multiply", "Disable", "Enable", "All", "On map". Every value has a
+// label: besides the special values (0; 2 for DE tech modifiers; -1 for
+// UpgradeMode), the game treats any value alike, so -1 adds or enables.
+QString effectModeName(genie::GameVersion version, RefKind kind, int mode);
+
+// The values of a Mode `kind` that `version`'s game data uses, ascending:
+// the special ones and the usual other one (1).
+QList<int> effectModeIds(genie::GameVersion version, RefKind kind);
+
 } // namespace newage

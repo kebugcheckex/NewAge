@@ -172,6 +172,7 @@ private slots:
     void getUnitFields();
     void getFieldPatterns();
     void getCompact();
+    void getEffectModes();
     void getTechActivityAndLabels();
     void batchNeedsRequests_data();
     void batchNeedsRequests();
@@ -600,14 +601,18 @@ void CliTest::lookupFixedTables()
     QCOMPARE(tables, (QStringList{QStringLiteral("civ"), QStringLiteral("unit"), QStringLiteral("tech"),
                                   QStringLiteral("effect"), QStringLiteral("resource"), QStringLiteral("unit-class"),
                                   QStringLiteral("attribute"), QStringLiteral("effect-type"),
-                                  QStringLiteral("unit-type"), QStringLiteral("tech-type")}));
+                                  QStringLiteral("unit-type"), QStringLiteral("tech-type"),
+                                  QStringLiteral("resource-mode"), QStringLiteral("tech-modifier-mode"),
+                                  QStringLiteral("enable-mode"),
+                                  QStringLiteral("upgrade-mode")}));
     for (const QString &table : tables.mid(4))
     {
         const HandlerResult result = RequestHandler().handle(tcSource(), lookup(table));
         QCOMPARE(result.exitCode, 0);
         const QJsonArray matches = result.body.value(QStringLiteral("matches")).toArray();
         QVERIFY2(!matches.isEmpty(), qPrintable(table));
-        int lastId = -1;
+        // upgrade-mode starts at -1 (All).
+        int lastId = -2;
         for (const QJsonValue &value : matches)
         {
             const QJsonObject match = value.toObject();
@@ -630,6 +635,12 @@ void CliTest::lookupFixedTables()
     QCOMPARE(disable.size(), 1);
     QCOMPARE(disable.first().toObject().value(QStringLiteral("id")).toInt(), 102);
     QCOMPARE(disable.first().toObject().value(QStringLiteral("name")).toString(), QStringLiteral("Disable Tech"));
+
+    const HandlerResult upgradeModes = RequestHandler().handle(tcSource(), lookup(QStringLiteral("upgrade-mode")));
+    const QJsonArray upgrade = upgradeModes.body.value(QStringLiteral("matches")).toArray();
+    QCOMPARE(upgrade.size(), 2);
+    QCOMPARE(upgrade.first().toObject().value(QStringLiteral("id")).toInt(), -1);
+    QCOMPARE(upgrade.first().toObject().value(QStringLiteral("name")).toString(), QStringLiteral("All"));
 }
 
 void CliTest::listChecksRequestBeforeOpen_data()
@@ -1038,6 +1049,61 @@ void CliTest::getFieldPatterns()
 
     request.insert(QStringLiteral("fields"), QJsonArray({QStringLiteral("command2.bogus")}));
     QCOMPARE(errorCode(RequestHandler().handle(tcSource(), request)), QStringLiteral("unknown_field"));
+}
+
+// A command Mode is a number labelled like other codes, with a label kind per
+// command type.
+void CliTest::getEffectModes()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    DataService service;
+    QVERIFY(service.open(tcSource()).ok);
+    const genie::DatFile &dat = *service.session().dat();
+
+    struct Case
+    {
+        int type;
+        QString labelKind;
+        RefKind kind;
+        bool inC; // Mode is stored in C, else in B.
+    };
+    const Case cases[] = {
+        {1, QStringLiteral("resource-mode"), RefKind::ResourceMode, false},
+        {2, QStringLiteral("enable-mode"), RefKind::EnableMode, false},
+        {101, QStringLiteral("tech-modifier-mode"), RefKind::TechModifierMode, true},
+    };
+    for (const Case &test : cases)
+    {
+        int effect = -1;
+        int command = -1;
+        for (int id = 0; id < int(dat.Effects.size()) && effect < 0; ++id)
+        {
+            const auto &commands = dat.Effects[id].EffectCommands;
+            for (int c = 0; c < int(commands.size()) && effect < 0; ++c)
+            {
+                if (commands[c].Type == test.type)
+                {
+                    effect = id;
+                    command = c;
+                }
+            }
+        }
+        QVERIFY2(effect >= 0, qPrintable(test.labelKind));
+        const QString key = QStringLiteral("command%1.mode").arg(command + 1);
+        QJsonObject request = get(QStringLiteral("effect"), {effect});
+        request.insert(QStringLiteral("fields"), QJsonArray({key}));
+        const HandlerResult result = RequestHandler().handle(tcSource(), request);
+        QCOMPARE(result.exitCode, 0);
+        const QJsonObject mode = fieldByKey(result.body.value(QStringLiteral("items")).toArray().first().toObject(), key);
+        const genie::EffectCommand &found = dat.Effects[effect].EffectCommands[command];
+        const int stored = test.inC ? found.C : found.B;
+        QCOMPARE(mode.value(QStringLiteral("type")).toString(), QStringLiteral("int"));
+        QVERIFY(mode.value(QStringLiteral("value")).isDouble());
+        QCOMPARE(mode.value(QStringLiteral("value")).toInt(), stored);
+        QCOMPARE(mode.value(QStringLiteral("labelKind")).toString(), test.labelKind);
+        QCOMPARE(mode.value(QStringLiteral("label")).toString(), effectModeName(service.session().gameVersion(), test.kind, stored));
+    }
 }
 
 void CliTest::getCompact()

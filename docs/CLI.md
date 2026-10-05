@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is not measured yet.
+Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type and effect command Mode, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 has started: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is not measured yet.
 
 ## 1. Goal
 
@@ -163,7 +163,9 @@ newage-cli lookup resource                 # the whole table: 0 Food Storage, 1 
 }
 ```
 
-- Tables: `civ`, `unit`, `tech`, `effect` (data) and `resource`, `unit-class`, `attribute`, `effect-type`, `unit-type`, `tech-type` (fixed lists from `ResourceNames`, `EffectNames` and friends).
+- Tables: `civ`, `unit`, `tech`, `effect` (data) and `resource`, `unit-class`, `attribute`, `effect-type`, `unit-type`, `tech-type`, `resource-mode`, `tech-modifier-mode`, `enable-mode`, `upgrade-mode` (fixed lists from `ResourceNames`, `EffectNames` and friends). Every `labelKind` that isn't a data kind is one of these tables.
+- The mode tables label an effect command's `mode` field, whose label kind depends on the command type: `resource-mode` (Resource Modifier: 0 Set, else +/-), `tech-modifier-mode` (Tech Cost and Tech Time Modifier: 0 Set, 2 Multiply in DE, else +/-), `enable-mode` (Enable/Disable Unit: 0 Disable, else Enable) and `upgrade-mode` (DE Upgrade Unit: -1 All, else On map). They list the values the data uses, but every value gets a label, because the games treat any other value alike: DE data uses -1 for adding and for enabling.
+- Matching is case-insensitive on the language name and the internal name; exact matches first, then prefix, then substring. With no `TEXT`, the whole table is returned.
 - Matching is case-insensitive on the language name and the internal name; exact matches first, then prefix, then substring. With no `TEXT`, the whole table is returned.
 - Civs have only internal names in the `.dat` (`Civ::Name`); civ language names are a later addition.
 - `unit` needs `--civ` (`"civ"` in a request) and leaves out empty unit slots; the other tables reject `--civ`. A civ out of range is `unknown_entity` with kind `civ`; an unknown table is `unknown_kind`.

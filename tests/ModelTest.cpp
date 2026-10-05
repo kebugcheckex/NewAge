@@ -869,6 +869,19 @@ void ModelTest::refNameLabelsReferences()
     QCOMPARE(refName(closed, RefKind::TechType, 2, 0), QStringLiteral("Age"));
     QCOMPARE(refName(closed, RefKind::TechType, 5, 0), QStringLiteral("Unknown"));
     QCOMPARE(refName(closed, RefKind::EffectType, 102, 0), effectTypeName(closed.gameVersion(), 102));
+    QCOMPARE(refName(closed, RefKind::ResourceMode, 0, 0), QStringLiteral("Set"));
+    QCOMPARE(refName(closed, RefKind::ResourceMode, -1, 0), QStringLiteral("+/-"));
+    QCOMPARE(effectModeName(genie::GV_LatestDE2, RefKind::TechModifierMode, 2), QStringLiteral("Multiply"));
+    QCOMPARE(effectModeName(genie::GV_TC, RefKind::TechModifierMode, 2), QStringLiteral("+/-"));
+    QCOMPARE(effectModeName(genie::GV_LatestDE2, RefKind::ResourceMode, 2), QStringLiteral("+/-"));
+    QCOMPARE(refName(closed, RefKind::EnableMode, 0, 0), QStringLiteral("Disable"));
+    QCOMPARE(refName(closed, RefKind::EnableMode, 1, 0), QStringLiteral("Enable"));
+    QCOMPARE(refName(closed, RefKind::UpgradeMode, -1, 0), QStringLiteral("All"));
+    QCOMPARE(refName(closed, RefKind::UpgradeMode, 1, 0), QStringLiteral("On map"));
+    QCOMPARE(fixedRefIds(closed.gameVersion(), RefKind::EnableMode), QList<int>({0, 1}));
+    QCOMPARE(fixedRefIds(closed.gameVersion(), RefKind::UpgradeMode), QList<int>({-1, 1}));
+    QCOMPARE(fixedRefIds(genie::GV_LatestDE2, RefKind::TechModifierMode), QList<int>({0, 1, 2}));
+    QCOMPARE(fixedRefIds(genie::GV_TC, RefKind::TechModifierMode), QList<int>({0, 1}));
     QCOMPARE(refName(closed, RefKind::Unit, 4, 1), QString());
     QCOMPARE(refName(closed, RefKind::Tech, 22, 1), QString());
     QCOMPARE(refName(closed, RefKind::Civ, 1, 0), QString());
@@ -1339,6 +1352,8 @@ void ModelTest::effectFieldsListCommands()
             return QStringLiteral("Archer");
         if (kind == RefKind::EffectType)
             return effectTypeName(genie::GV_TC, id);
+        if (kind == RefKind::EnableMode)
+            return effectModeName(genie::GV_TC, kind, id);
         return QString();
     };
     FieldTreeModel model;
@@ -1361,8 +1376,10 @@ void ModelTest::effectFieldsListCommands()
 
     QCOMPARE(fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("Unit")).data().toString(),
              QStringLiteral("Archer (4)"));
-    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("Mode")).data().toString(),
-             QStringLiteral("0 - Disable"));
+    const QModelIndex enable = fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("Mode"));
+    QCOMPARE(enable.data().toString(), QStringLiteral("0 - Disable"));
+    QCOMPARE(enable.data(FieldTreeModel::ValueRole), QVariant(0));
+    QCOMPARE(enable.data(FieldTreeModel::RefKindRole).toInt(), static_cast<int>(RefKind::EnableMode));
     QVERIFY(!fieldInGroup(model, QStringLiteral("Command 2"), QStringLiteral("C")).isValid());
 
     QCOMPARE(fieldInGroup(model, QStringLiteral("Command 3"), QStringLiteral("Type")).data().toString(),
@@ -1379,6 +1396,9 @@ void ModelTest::effectFieldsListCommands()
     cost.D = 50;
     resource.EffectCommands = {cost};
     model.setObject(effectFields(resource, genie::GV_TC), EffectRef{1, resource});
+    const QModelIndex setMode = fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Mode"));
+    QCOMPARE(setMode.data(FieldTreeModel::ValueRole), QVariant(0));
+    QCOMPARE(setMode.data(FieldTreeModel::RefKindRole).toInt(), static_cast<int>(RefKind::ResourceMode));
     QVERIFY(!fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Multiply resource")).isValid());
     model.setObject(effectFields(resource, genie::GV_C2), EffectRef{1, resource});
     QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Multiply resource")).data().toInt(), 1);
@@ -1403,6 +1423,10 @@ void ModelTest::effectFieldsListCommands()
             case RefKind::Attribute: return effectAttributeName(version, id);
             case RefKind::Tech: return id == 22 ? QStringLiteral("Loom") : QString();
             case RefKind::EffectType: return effectTypeName(version, id);
+            case RefKind::ResourceMode:
+            case RefKind::TechModifierMode:
+            case RefKind::EnableMode:
+            case RefKind::UpgradeMode: return effectModeName(version, kind, id);
             default: return QString();
             }
         };
@@ -1460,8 +1484,10 @@ void ModelTest::effectFieldsListCommands()
     toUnit.C = -1;
     upgrade.EffectCommands = {toUnit};
     model.setObject(effectFields(upgrade, genie::GV_C2), EffectRef{3, upgrade}, nullptr, {}, names(genie::GV_C2));
-    QCOMPARE(fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Mode")).data().toString(),
-             QStringLiteral("-1 - All"));
+    const QModelIndex onMap = fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("Mode"));
+    QCOMPARE(onMap.data().toString(), QStringLiteral("-1 - All"));
+    QCOMPARE(onMap.data(FieldTreeModel::ValueRole), QVariant(-1));
+    QCOMPARE(onMap.data(FieldTreeModel::RefKindRole).toInt(), static_cast<int>(RefKind::UpgradeMode));
     QVERIFY(!fieldInGroup(model, QStringLiteral("Command 1"), QStringLiteral("To unit")).isValid());
 
     genie::Effect techMod;

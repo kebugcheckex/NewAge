@@ -37,6 +37,18 @@ enum class RefKind
     // EffectCommand::Type (102 - Disable Tech, ...). Which types exist
     // depends on the game version. A code, see isCodeKind().
     EffectType,
+    // Mode of the resource modifier command (0 - Set, else +/-). A code, see
+    // isCodeKind().
+    ResourceMode,
+    // Mode of the tech cost and tech time modifier commands (0 - Set,
+    // 2 - Multiply in DE, else +/-). A code, see isCodeKind().
+    TechModifierMode,
+    // Mode of the enable/disable unit command (0 - Disable, else Enable).
+    // A code, see isCodeKind().
+    EnableMode,
+    // Mode of the DE upgrade unit command (-1 - All, else On map). A code,
+    // see isCodeKind().
+    UpgradeMode,
 };
 
 // Whether values of `kind` are codes from a fixed list (unit types) rather
@@ -44,7 +56,19 @@ enum class RefKind
 // AGE does, and references as "Archer (4)".
 inline bool isCodeKind(RefKind kind)
 {
-    return kind == RefKind::UnitType || kind == RefKind::TechType || kind == RefKind::EffectType;
+    switch (kind)
+    {
+    case RefKind::UnitType:
+    case RefKind::TechType:
+    case RefKind::EffectType:
+    case RefKind::ResourceMode:
+    case RefKind::TechModifierMode:
+    case RefKind::EnableMode:
+    case RefKind::UpgradeMode:
+        return true;
+    default:
+        return false;
+    }
 }
 
 // An int field that is a frame index in a game sprite. The view may preview
