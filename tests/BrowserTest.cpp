@@ -496,11 +496,14 @@ void BrowserTest::editEffectsAndUnusedFields()
     Config config(dir_.filePath(QStringLiteral("effect-edit.json")));
     const auto effects = effectBrowser(&session, &config);
     auto *fields = effects->findChild<QTreeView *>();
-    auto *unused = effects->findChild<QCheckBox *>();
-    QVERIFY(fields && unused);
+    QVERIFY(fields);
+    QVERIFY(!effects->findChild<QCheckBox *>());
     QString error;
     QVERIFY2(session.open(kTcDat, *findVersionProfile(QStringLiteral("tc")), &error), qPrintable(error));
     effects->selectEntity(22);
+    auto *effectFields = qobject_cast<FieldTreeModel *>(fields->model());
+    QVERIFY(effectFields);
+    QVERIFY(!effectFields->includeUnused());
     const QModelIndex count = valueIndex(fields, QStringLiteral("Command count"));
     QVERIFY(count.flags() & Qt::ItemIsEditable);
     const int before = count.data(FieldTreeModel::ValueRole).toInt();
@@ -509,18 +512,26 @@ void BrowserTest::editEffectsAndUnusedFields()
     QCOMPARE(static_cast<int>(session.dat()->Effects.at(22).EffectCommands.size()), before + 1);
     QTRY_COMPARE(fields->model()->rowCount(), groupsBefore + 1);
     QVERIFY(session.isModified());
+    QVERIFY(!valueIndex(fields, QStringLiteral("A")).isValid());
+    config.setShowUnusedEffectFields(true);
+    QVERIFY(valueIndex(fields, QStringLiteral("A")).isValid());
+    config.setShowUnusedEffectFields(false);
+    QVERIFY(!valueIndex(fields, QStringLiteral("A")).isValid());
 
     const auto techs = techBrowser(&session, &config);
     auto *techFields = techs->findChild<QTreeView *>();
-    auto *techUnused = techs->findChild<QCheckBox *>();
-    QVERIFY(techFields && techUnused);
+    QVERIFY(techFields);
+    QVERIFY(!techs->findChild<QCheckBox *>());
     techs->selectEntity(22);
     QVERIFY(!valueIndex(techFields, QStringLiteral("Required tech 2")).isValid());
-    techUnused->setChecked(true);
+    config.setShowUnusedTechFields(true);
+    QVERIFY(!effectFields->includeUnused());
     const QModelIndex slot = valueIndex(techFields, QStringLiteral("Required tech 2"));
     QVERIFY(slot.flags() & Qt::ItemIsEditable);
     QVERIFY(techFields->model()->setData(slot, 101));
     QCOMPARE(session.dat()->Techs.at(22).RequiredTechs.at(1), int16_t(101));
+    config.setShowUnusedTechFields(false);
+    QVERIFY(!valueIndex(techFields, QStringLiteral("Required tech 3")).isValid());
 }
 
 void BrowserTest::diffDialogFiltersAndShowsFields()
@@ -584,31 +595,47 @@ void BrowserTest::optionsDialogEditsConfig()
         OptionsDialog dialog(&config);
         auto *hideEmpty = dialog.findChild<QCheckBox *>(QStringLiteral("hideEmptyUnits"));
         auto *hideTechs = dialog.findChild<QCheckBox *>(QStringLiteral("hideUnavailableTechs"));
-        QVERIFY(hideEmpty && hideTechs);
+        auto *showTechFields = dialog.findChild<QCheckBox *>(QStringLiteral("showUnusedTechFields"));
+        auto *showEffectFields = dialog.findChild<QCheckBox *>(QStringLiteral("showUnusedEffectFields"));
+        QVERIFY(hideEmpty && hideTechs && showTechFields && showEffectFields);
         QVERIFY(!hideEmpty->isChecked());
         QVERIFY(!hideTechs->isChecked());
+        QVERIFY(!showTechFields->isChecked());
+        QVERIFY(!showEffectFields->isChecked());
         hideEmpty->setChecked(true);
         hideTechs->setChecked(true);
+        showTechFields->setChecked(true);
+        showEffectFields->setChecked(true);
         dialog.reject();
         QCOMPARE(config.hideEmptyUnits(), false);
         QCOMPARE(config.hideUnavailableTechs(), false);
+        QCOMPARE(config.showUnusedTechFields(), false);
+        QCOMPARE(config.showUnusedEffectFields(), false);
     }
     {
         OptionsDialog dialog(&config);
         dialog.findChild<QCheckBox *>(QStringLiteral("hideEmptyUnits"))->setChecked(true);
+        dialog.findChild<QCheckBox *>(QStringLiteral("showUnusedTechFields"))->setChecked(true);
         dialog.accept();
         QCOMPARE(config.hideEmptyUnits(), true);
         QCOMPARE(config.hideUnavailableTechs(), false);
+        QCOMPARE(config.showUnusedTechFields(), true);
+        QCOMPARE(config.showUnusedEffectFields(), false);
     }
     {
         OptionsDialog dialog(&config);
         dialog.findChild<QCheckBox *>(QStringLiteral("hideUnavailableTechs"))->setChecked(true);
+        dialog.findChild<QCheckBox *>(QStringLiteral("showUnusedEffectFields"))->setChecked(true);
         dialog.accept();
         QCOMPARE(config.hideUnavailableTechs(), true);
+        QCOMPARE(config.showUnusedTechFields(), true);
+        QCOMPARE(config.showUnusedEffectFields(), true);
     }
     OptionsDialog dialog(&config);
     QVERIFY(dialog.findChild<QCheckBox *>(QStringLiteral("hideEmptyUnits"))->isChecked());
     QVERIFY(dialog.findChild<QCheckBox *>(QStringLiteral("hideUnavailableTechs"))->isChecked());
+    QVERIFY(dialog.findChild<QCheckBox *>(QStringLiteral("showUnusedTechFields"))->isChecked());
+    QVERIFY(dialog.findChild<QCheckBox *>(QStringLiteral("showUnusedEffectFields"))->isChecked());
 }
 
 // An HD game folder with two mods: Balance, with its own .dat, and Empty,

@@ -41,6 +41,12 @@ public:
     bool hideUnavailableTechs() const;
     void setHideUnavailableTechs(bool hide);
 
+    // Field views: include editable fields that are not currently in use.
+    bool showUnusedTechFields() const;
+    void setShowUnusedTechFields(bool show);
+    bool showUnusedEffectFields() const;
+    void setShowUnusedEffectFields(bool show);
+
 signals:
     // Emitted after load() and after any setter that changes a value.
     void changed();

@@ -4,7 +4,6 @@
 
 #include <QAbstractSlider>
 #include <QComboBox>
-#include <QCheckBox>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHeaderView>
@@ -246,15 +245,6 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->addWidget(civCombo_);
     leftLayout->addWidget(filterEdit_);
-    if (qobject_cast<TechListModel *>(listModel_) || qobject_cast<EffectListModel *>(listModel_))
-    {
-        showUnused_ = new QCheckBox(tr("Show unused fields"), left);
-        leftLayout->addWidget(showUnused_);
-        connect(showUnused_, &QCheckBox::toggled, this, [this](bool checked) {
-            fieldModel_->setIncludeUnused(checked);
-            showSelected();
-        });
-    }
     leftLayout->addWidget(listView_);
 
     auto *splitter = new QSplitter(this);
@@ -405,6 +395,16 @@ void EntityBrowser::applyConfig()
 {
     if (hideInactive_)
         listFilter_->setHideInactive((config_->*hideInactive_)());
+    bool includeUnused = false;
+    if (qobject_cast<TechListModel *>(listModel_))
+        includeUnused = config_->showUnusedTechFields();
+    else if (qobject_cast<EffectListModel *>(listModel_))
+        includeUnused = config_->showUnusedEffectFields();
+    if (fieldModel_->includeUnused() != includeUnused)
+    {
+        fieldModel_->setIncludeUnused(includeUnused);
+        showSelected();
+    }
     if (listView_->currentIndex().isValid())
         listView_->scrollTo(listView_->currentIndex());
 }

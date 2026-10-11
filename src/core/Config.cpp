@@ -15,6 +15,9 @@ const auto kUnitList = QStringLiteral("unitList");
 const auto kHideEmpty = QStringLiteral("hideEmpty");
 const auto kTechList = QStringLiteral("techList");
 const auto kHideUnavailable = QStringLiteral("hideUnavailable");
+const auto kTechFields = QStringLiteral("techFields");
+const auto kEffectFields = QStringLiteral("effectFields");
+const auto kShowUnused = QStringLiteral("showUnused");
 
 } // namespace
 
@@ -100,6 +103,26 @@ bool Config::hideUnavailableTechs() const
 void Config::setHideUnavailableTechs(bool hide)
 {
     setValue(kTechList, kHideUnavailable, hide);
+}
+
+bool Config::showUnusedTechFields() const
+{
+    return value(kTechFields, kShowUnused).toBool(false);
+}
+
+void Config::setShowUnusedTechFields(bool show)
+{
+    setValue(kTechFields, kShowUnused, show);
+}
+
+bool Config::showUnusedEffectFields() const
+{
+    return value(kEffectFields, kShowUnused).toBool(false);
+}
+
+void Config::setShowUnusedEffectFields(bool show)
+{
+    setValue(kEffectFields, kShowUnused, show);
 }
 
 QJsonValue Config::value(const QString &section, const QString &key) const

@@ -14,7 +14,6 @@ class QLabel;
 
 class QComboBox;
 class QLineEdit;
-class QCheckBox;
 class QListView;
 class QTreeView;
 
@@ -84,7 +83,6 @@ private:
 
     QComboBox *civCombo_;
     QLineEdit *filterEdit_;
-    QCheckBox *showUnused_ = nullptr;
     QListView *listView_;
     QTreeView *fieldView_;
     QLabel *iconPopup_ = nullptr;

@@ -51,6 +51,8 @@ void ConfigTest::missingFileGivesDefaults()
     QVERIFY(config.load(&error));
     QVERIFY(error.isEmpty());
     QCOMPARE(config.hideEmptyUnits(), false);
+    QCOMPARE(config.showUnusedTechFields(), false);
+    QCOMPARE(config.showUnusedEffectFields(), false);
 }
 
 void ConfigTest::saveThenLoad()
@@ -59,13 +61,25 @@ void ConfigTest::saveThenLoad()
     const QString path = dir_.filePath(QStringLiteral("sub/dir/config.json"));
     Config config(path);
     config.setHideEmptyUnits(true);
+    config.setShowUnusedTechFields(true);
+    config.setShowUnusedEffectFields(false);
     QString error;
     QVERIFY2(config.save(&error), qPrintable(error));
     QCOMPARE(readJson(path)[QStringLiteral("unitList")][QStringLiteral("hideEmpty")].toBool(), true);
+    QCOMPARE(readJson(path)[QStringLiteral("techFields")][QStringLiteral("showUnused")].toBool(), true);
+    QCOMPARE(readJson(path)[QStringLiteral("effectFields")][QStringLiteral("showUnused")].toBool(), false);
 
     Config reloaded(path);
     QVERIFY2(reloaded.load(&error), qPrintable(error));
     QCOMPARE(reloaded.hideEmptyUnits(), true);
+    QCOMPARE(reloaded.showUnusedTechFields(), true);
+    QCOMPARE(reloaded.showUnusedEffectFields(), false);
+    reloaded.setShowUnusedEffectFields(true);
+    QVERIFY(reloaded.save());
+    Config both(path);
+    QVERIFY(both.load());
+    QCOMPARE(both.showUnusedTechFields(), true);
+    QCOMPARE(both.showUnusedEffectFields(), true);
 }
 
 void ConfigTest::keepsUnknownEntries()
