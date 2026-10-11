@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include <QByteArray>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -224,6 +225,43 @@ struct ApplyResult
     QList<FieldChange> unchanged;
 };
 
+// The first creation mode is an automatic, hidden civ bonus. Each command is
+// an attribute set, add, or multiply effect (types 0, 4, and 5). -1 means no
+// unit or class target; at least one target is required.
+struct AttributeCommand
+{
+    int type = -1;
+    int unit = -1;
+    int unitClass = -1;
+    int attribute = -1;
+    double amount = 0;
+};
+
+struct CreateTechSpec
+{
+    int civ = -1;
+    QString internalName;
+    QString effectInternalName;
+    QList<int> prerequisites;
+    QList<AttributeCommand> commands;
+    std::optional<int> expectedTechCount;
+    std::optional<int> expectedEffectCount;
+    QString expectedFileVersion;
+    QString expectedSourceFingerprint;
+};
+
+struct CreateTechResult
+{
+    bool ok = false;
+    ServiceError error;
+    int techId = -1;
+    int effectId = -1;
+    QString saved;
+    QString sourceFingerprint;
+    QList<FieldValue> techFields;
+    QList<FieldValue> effectFields;
+};
+
 // What `diff` compares. An empty `kind` compares every kind. `civ` limits
 // units to that civ; -1 compares every civ both files have. `fields` are key
 // patterns, as in GetQuery, and need a kind; they limit the fields compared.
@@ -362,6 +400,10 @@ public:
     // dry run reports the same change list, then undoes it.
     ApplyResult apply(const QList<FieldEdit> &edits, bool dryRun = false);
 
+    // Appends an automatic civ tech and its effect. Validation, dry runs, and
+    // failed saves restore both vectors and the modified state.
+    CreateTechResult createTech(const CreateTechSpec &spec, bool dryRun = false);
+
     // Compares the open mod's .dat with the game's current data set, which it
     // loads alongside. Entities are matched by ID. Civs are compared by
     // presence only, and units over the civs both files have. Each side keeps
@@ -379,6 +421,8 @@ private:
     QString savePath_;
     QStringList warnings_;
     bool loose_ = false;
+    QByteArray sourceFingerprint_;
+    bool saveExistedAtOpen_ = false;
 };
 
 } // namespace newage

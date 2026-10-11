@@ -84,6 +84,7 @@ private slots:
     void modsCreateMakesAMod();
     void diffRejectsBadArguments();
     void diffShowsASet();
+    void techCreateReadsStdin();
 };
 
 void CliProcessTest::missingCommandIsJsonUsage()
@@ -92,6 +93,18 @@ void CliProcessTest::missingCommandIsJsonUsage()
     QCOMPARE(response.exitCode, 1);
     QCOMPARE(errorCode(response), QStringLiteral("usage"));
     QVERIFY(response.error.isEmpty());
+}
+
+void CliProcessTest::techCreateReadsStdin()
+{
+    const QByteArray spec = R"({"mode":"automatic","civ":6,"internalName":"Bonus","prerequisites":[],"effect":{"internalName":"Bonus Effect","commands":[{"type":5,"class":4,"attribute":13,"amount":1.5}]}})";
+    const Response response = run({QStringLiteral("--mod"), QStringLiteral("Balance"), QStringLiteral("--dry-run"),
+                                   QStringLiteral("tech"), QStringLiteral("create"), QStringLiteral("-")}, spec);
+    QCOMPARE(response.exitCode, 2);
+    QCOMPARE(errorCode(response), QStringLiteral("no_dataset"));
+    const Response bad = run({QStringLiteral("tech"), QStringLiteral("create"), QStringLiteral("-")}, QByteArray("[]"));
+    QCOMPARE(bad.exitCode, 1);
+    QCOMPARE(errorCode(bad), QStringLiteral("usage"));
 }
 
 void CliProcessTest::unknownOptionIsJsonUsage()

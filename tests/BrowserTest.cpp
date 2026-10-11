@@ -14,9 +14,11 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QTableWidget>
 #include <QTest>
 #include <QToolButton>
 #include <QTreeView>
+#include <QTreeWidget>
 
 #include "core/Config.h"
 #include "core/Mods.h"
@@ -29,9 +31,11 @@
 #include "model/UnitListModel.h"
 #include "model/UnitNames.h"
 #include "ui/EntityBrowser.h"
+#include "ui/DiffDialog.h"
 #include "ui/ModsDialog.h"
 #include "ui/ModsPanel.h"
 #include "ui/OptionsDialog.h"
+#include "ui/TechCreateDialog.h"
 
 using namespace newage;
 
@@ -129,6 +133,9 @@ private slots:
     void browseSampleTechs();
     void doubleClickEffectSelectsIt();
     void editFields();
+    void editEffectsAndUnusedFields();
+    void diffDialogFiltersAndShowsFields();
+    void techCreateDialogCollectsCommands();
     void optionsDialogEditsConfig();
     void modsPanelListsMods();
     void saveAsModDialogListsMods();
@@ -479,6 +486,95 @@ void BrowserTest::editFields()
              QStringLiteral("%1 (%2)").arg(otherName.isEmpty() ? QStringLiteral("(unnamed)") : otherName).arg(other));
     // The combo is parented to the view; drop it before the browser does.
     editor.reset();
+}
+
+void BrowserTest::editEffectsAndUnusedFields()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    Session session;
+    Config config(dir_.filePath(QStringLiteral("effect-edit.json")));
+    const auto effects = effectBrowser(&session, &config);
+    auto *fields = effects->findChild<QTreeView *>();
+    auto *unused = effects->findChild<QCheckBox *>();
+    QVERIFY(fields && unused);
+    QString error;
+    QVERIFY2(session.open(kTcDat, *findVersionProfile(QStringLiteral("tc")), &error), qPrintable(error));
+    effects->selectEntity(22);
+    const QModelIndex count = valueIndex(fields, QStringLiteral("Command count"));
+    QVERIFY(count.flags() & Qt::ItemIsEditable);
+    const int before = count.data(FieldTreeModel::ValueRole).toInt();
+    const int groupsBefore = fields->model()->rowCount();
+    QVERIFY(fields->model()->setData(count, before + 1));
+    QCOMPARE(static_cast<int>(session.dat()->Effects.at(22).EffectCommands.size()), before + 1);
+    QTRY_COMPARE(fields->model()->rowCount(), groupsBefore + 1);
+    QVERIFY(session.isModified());
+
+    const auto techs = techBrowser(&session, &config);
+    auto *techFields = techs->findChild<QTreeView *>();
+    auto *techUnused = techs->findChild<QCheckBox *>();
+    QVERIFY(techFields && techUnused);
+    techs->selectEntity(22);
+    QVERIFY(!valueIndex(techFields, QStringLiteral("Required tech 2")).isValid());
+    techUnused->setChecked(true);
+    const QModelIndex slot = valueIndex(techFields, QStringLiteral("Required tech 2"));
+    QVERIFY(slot.flags() & Qt::ItemIsEditable);
+    QVERIFY(techFields->model()->setData(slot, 101));
+    QCOMPARE(session.dat()->Techs.at(22).RequiredTechs.at(1), int16_t(101));
+}
+
+void BrowserTest::diffDialogFiltersAndShowsFields()
+{
+    DiffResult result;
+    result.ok = true;
+    result.hasDat = true;
+    result.changed = 1;
+    result.onlyInMod = 1;
+    result.counts = {{QStringLiteral("unit"), 10, 10}, {QStringLiteral("tech"), 2, 1}};
+    DiffItem unit;
+    unit.kind = QStringLiteral("unit");
+    unit.id = 4;
+    unit.name = QStringLiteral("Archer");
+    unit.civs = {1, 2};
+    unit.fields.append({QStringLiteral("hit_points"), RefKind::None, false, 35, 30});
+    DiffItem tech;
+    tech.kind = QStringLiteral("tech");
+    tech.id = 1;
+    tech.name = QStringLiteral("Bonus");
+    tech.status = DiffStatus::OnlyInMod;
+    result.items = {unit, tech};
+    DiffDialog dialog(result);
+    auto *items = dialog.findChild<QTableWidget *>(QStringLiteral("diffItems"));
+    auto *fields = dialog.findChild<QTreeWidget *>(QStringLiteral("diffFields"));
+    auto *filter = dialog.findChild<QLineEdit *>();
+    QVERIFY(items && fields && filter);
+    QCOMPARE(items->rowCount(), 2);
+    QCOMPARE(fields->topLevelItem(0)->text(0), QStringLiteral("hit_points"));
+    QCOMPARE(fields->topLevelItem(0)->text(1), QStringLiteral("35"));
+    filter->setText(QStringLiteral("Bonus"));
+    QCOMPARE(items->rowCount(), 1);
+    QCOMPARE(items->item(0, 0)->text(), QStringLiteral("tech 1"));
+}
+
+void BrowserTest::techCreateDialogCollectsCommands()
+{
+    if (!QFile::exists(kTcDat))
+        QSKIP("Sample data/empires2_x1_p1.dat not present.");
+    Session session;
+    QString error;
+    QVERIFY2(session.open(kTcDat, *findVersionProfile(QStringLiteral("tc")), &error), qPrintable(error));
+    TechCreateDialog dialog(session, 3);
+    dialog.findChild<QLineEdit *>(QStringLiteral("techInternalName"))->setText(QStringLiteral("Test Bonus"));
+    dialog.findChild<QLineEdit *>(QStringLiteral("effectInternalName"))->setText(QStringLiteral("Test Effect"));
+    auto *commands = dialog.findChild<QTableWidget *>(QStringLiteral("techCommands"));
+    QVERIFY(commands);
+    qobject_cast<QSpinBox *>(commands->cellWidget(0, 1))->setValue(4);
+    const CreateTechSpec spec = dialog.spec();
+    QCOMPARE(spec.civ, 3);
+    QCOMPARE(spec.internalName, QStringLiteral("Test Bonus"));
+    QCOMPARE(spec.commands.size(), 1);
+    QCOMPARE(spec.commands.front().type, 4);
+    QCOMPARE(spec.commands.front().unit, 4);
 }
 
 void BrowserTest::optionsDialogEditsConfig()

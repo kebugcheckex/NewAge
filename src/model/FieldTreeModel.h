@@ -62,6 +62,7 @@ public:
         // edit.
         RefKind ref = RefKind::None;
         SpriteKind sprite = SpriteKind::None;
+        QString key;
     };
 
     // Stores `value` (int or float, checked against the row's range) in field
@@ -82,15 +83,16 @@ public:
     // index in `fields`. Reference fields are labelled by `refNamer` (if given).
     template <typename T>
     void setObject(const QList<FieldDesc<T>> &fields, const T &object, const NameProvider *names = nullptr,
-                   Writer writer = {}, const RefNamer &refNamer = {})
+                   Writer writer = {}, const RefNamer &refNamer = {}, bool includeUnused = false)
     {
         QList<Row> rows;
         for (qsizetype i = 0; i < fields.size(); ++i)
         {
             const FieldDesc<T> &field = fields.at(i);
-            if (field.applies && !field.applies(object))
+            if (field.applies && !field.applies(object) && !(includeUnused && field.set && canSet(field, object)))
                 continue;
             Row row{field.name, field.group, field.get(object)};
+            row.key = field.key;
             if (field.isStringId && names)
                 row.note = names->text(row.value.toInt());
             row.ref = field.ref;
@@ -130,6 +132,11 @@ public:
     // Formats a field value for display. Floats use the shortest text that
     // reads back as the same float (0.2, not 0.200000003).
     static QString displayText(const QVariant &value);
+    void setIncludeUnused(bool include) { includeUnused_ = include; }
+    bool includeUnused() const { return includeUnused_; }
+
+signals:
+    void fieldEdited(const QString &key);
 
 private:
     struct Group
@@ -143,6 +150,7 @@ private:
     bool isEditable(const Row &row) const { return row.field >= 0 && writer_; }
 
     QList<Group> groups_;
+    bool includeUnused_ = false;
     Writer writer_;
     RefNamer refNamer_;
 };

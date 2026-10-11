@@ -546,6 +546,7 @@ HandlerResult handleBatch(const DataSource &source, const QJsonObject &request)
         }
         const QJsonValue batchedOp = value.toObject().value(QStringLiteral("op"));
         if (batchedOp == QStringLiteral("set") || batchedOp == QStringLiteral("apply")
+            || batchedOp == QStringLiteral("tech-create")
             || batchedOp == QStringLiteral("mods-create"))
         {
             results[i] = usage(QStringLiteral("%1 writes and cannot be in a batch.").arg(batchedOp.toString()));
@@ -799,6 +800,152 @@ HandlerResult handleWrite(const DataSource &source, const QJsonObject &request)
     return succeeded(applyObject(applied, dryRun), opened.warnings);
 }
 
+QString unknownKey(const QJsonObject &object, const QStringList &allowed, const QString &where)
+{
+    for (const QString &key : object.keys())
+    {
+        if (!allowed.contains(key))
+            return QStringLiteral("Unknown %1 key \"%2\".").arg(where, key);
+    }
+    return {};
+}
+
+HandlerResult handleTechCreate(const DataSource &source, const QJsonObject &request)
+{
+    if (const QString error = unknownKey(request, {QStringLiteral("op"), QStringLiteral("spec"), QStringLiteral("dryRun")},
+                                         QStringLiteral("request")); !error.isEmpty())
+        return usage(error);
+    if (!request.value(QStringLiteral("spec")).isObject())
+        return usage(QStringLiteral("tech-create needs a spec object."));
+    const QJsonValue dryValue = request.value(QStringLiteral("dryRun"));
+    if (!dryValue.isUndefined() && !dryValue.isBool())
+        return usage(QStringLiteral("dryRun must be true or false."));
+    const QJsonObject object = request.value(QStringLiteral("spec")).toObject();
+    if (const QString error = unknownKey(object, {QStringLiteral("mode"), QStringLiteral("civ"),
+                                                 QStringLiteral("internalName"), QStringLiteral("prerequisites"),
+                                                 QStringLiteral("effect"), QStringLiteral("expect")},
+                                         QStringLiteral("spec")); !error.isEmpty())
+        return usage(error);
+    if (object.value(QStringLiteral("mode")) != QStringLiteral("automatic"))
+        return failed(makeError(QStringLiteral("bad_value"), QStringLiteral("Only automatic tech creation is implemented.")));
+
+    CreateTechSpec spec;
+    if (!readInt(object.value(QStringLiteral("civ")), spec.civ))
+        return usage(QStringLiteral("spec.civ must be an integer."));
+    if (!object.value(QStringLiteral("internalName")).isString())
+        return usage(QStringLiteral("spec.internalName must be a string."));
+    spec.internalName = object.value(QStringLiteral("internalName")).toString();
+    if (!object.value(QStringLiteral("prerequisites")).isArray())
+        return usage(QStringLiteral("spec.prerequisites must be an explicit array."));
+    for (const QJsonValue &value : object.value(QStringLiteral("prerequisites")).toArray())
+    {
+        int id = -1;
+        if (!readInt(value, id))
+            return usage(QStringLiteral("Every prerequisite must be an integer tech ID."));
+        spec.prerequisites.append(id);
+    }
+    if (!object.value(QStringLiteral("effect")).isObject())
+        return usage(QStringLiteral("spec.effect must be an object."));
+    const QJsonObject effect = object.value(QStringLiteral("effect")).toObject();
+    if (const QString error = unknownKey(effect, {QStringLiteral("internalName"), QStringLiteral("commands")},
+                                         QStringLiteral("effect")); !error.isEmpty())
+        return usage(error);
+    if (!effect.value(QStringLiteral("internalName")).isString())
+        return usage(QStringLiteral("effect.internalName must be a string."));
+    spec.effectInternalName = effect.value(QStringLiteral("internalName")).toString();
+    if (!effect.value(QStringLiteral("commands")).isArray())
+        return usage(QStringLiteral("effect.commands must be an array."));
+    for (const QJsonValue &value : effect.value(QStringLiteral("commands")).toArray())
+    {
+        if (!value.isObject())
+            return usage(QStringLiteral("Every effect command must be an object."));
+        const QJsonObject item = value.toObject();
+        if (const QString error = unknownKey(item, {QStringLiteral("type"), QStringLiteral("unit"),
+                                                    QStringLiteral("class"), QStringLiteral("attribute"),
+                                                    QStringLiteral("amount")},
+                                             QStringLiteral("command")); !error.isEmpty())
+            return usage(error);
+        AttributeCommand command;
+        if (!readInt(item.value(QStringLiteral("type")), command.type)
+            || !readInt(item.value(QStringLiteral("attribute")), command.attribute)
+            || !item.value(QStringLiteral("amount")).isDouble())
+            return usage(QStringLiteral("Each command needs numeric type, attribute, and amount."));
+        if (item.contains(QStringLiteral("unit")) && !readInt(item.value(QStringLiteral("unit")), command.unit))
+            return usage(QStringLiteral("command.unit must be an integer."));
+        if (item.contains(QStringLiteral("class")) && !readInt(item.value(QStringLiteral("class")), command.unitClass))
+            return usage(QStringLiteral("command.class must be an integer."));
+        command.amount = item.value(QStringLiteral("amount")).toDouble();
+        spec.commands.append(command);
+    }
+    if (object.contains(QStringLiteral("expect")))
+    {
+        if (!object.value(QStringLiteral("expect")).isObject())
+            return usage(QStringLiteral("spec.expect must be an object."));
+        const QJsonObject expected = object.value(QStringLiteral("expect")).toObject();
+        if (const QString error = unknownKey(expected, {QStringLiteral("techCount"), QStringLiteral("effectCount"),
+                                                        QStringLiteral("fileVersion"), QStringLiteral("sourceFingerprint")},
+                                             QStringLiteral("expect")); !error.isEmpty())
+            return usage(error);
+        for (const QString &key : {QStringLiteral("techCount"), QStringLiteral("effectCount")})
+        {
+            if (!expected.contains(key))
+                continue;
+            int count = -1;
+            if (!readInt(expected.value(key), count) || count < 0)
+                return usage(QStringLiteral("expect.%1 must be a non-negative integer.").arg(key));
+            if (key == QStringLiteral("techCount"))
+                spec.expectedTechCount = count;
+            else
+                spec.expectedEffectCount = count;
+        }
+        if (expected.contains(QStringLiteral("fileVersion")))
+        {
+            if (!expected.value(QStringLiteral("fileVersion")).isString())
+                return usage(QStringLiteral("expect.fileVersion must be a string."));
+            spec.expectedFileVersion = expected.value(QStringLiteral("fileVersion")).toString();
+        }
+        if (expected.contains(QStringLiteral("sourceFingerprint")))
+        {
+            if (!expected.value(QStringLiteral("sourceFingerprint")).isString())
+                return usage(QStringLiteral("expect.sourceFingerprint must be a string."));
+            spec.expectedSourceFingerprint = expected.value(QStringLiteral("sourceFingerprint")).toString();
+        }
+    }
+
+    const DataSource resolved = resolveSource(source);
+    if (!resolved.datPath.isEmpty())
+        return failed(makeError(QStringLiteral("mods_unsupported"), QStringLiteral("A loose data file is read-only.")));
+    if (resolved.mod.isEmpty())
+        return failed(makeError(QStringLiteral("mod_required"), QStringLiteral("Writing needs a mod (--mod).")));
+    DataService service;
+    const OpenResult opened = service.open(resolved);
+    if (!opened.ok)
+        return failed(opened.error, opened.warnings);
+    const bool dryRun = dryValue.toBool();
+    const CreateTechResult created = service.createTech(spec, dryRun);
+    if (!created.ok)
+        return failed(created.error, opened.warnings);
+    const auto values = [](const QList<FieldValue> &fields) {
+        QJsonObject object;
+        for (const FieldValue &field : fields)
+            object.insert(field.key, storedValue(field.value));
+        return object;
+    };
+    QJsonObject body;
+    body.insert(QStringLiteral("techId"), created.techId);
+    body.insert(QStringLiteral("effectId"), created.effectId);
+    body.insert(QStringLiteral("tech"), values(created.techFields));
+    body.insert(QStringLiteral("effect"), values(created.effectFields));
+    body.insert(QStringLiteral("dryRun"), dryRun);
+    body.insert(QStringLiteral("sourceFingerprint"), created.sourceFingerprint);
+    body.insert(QStringLiteral("saved"), jsonPath(created.saved));
+    QJsonArray warnings;
+    for (const QString &warning : opened.warnings)
+        warnings.append(warning);
+    body.insert(QStringLiteral("warnings"), warnings);
+    return succeeded(body, opened.warnings);
+}
+
 // Makes a mod. Reads no data, so it is quick even on DE.
 HandlerResult handleModsCreate(const DataSource &source, const QJsonObject &request)
 {
@@ -1032,6 +1179,8 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
     if (request.value(QStringLiteral("op")) == QStringLiteral("set")
         || request.value(QStringLiteral("op")) == QStringLiteral("apply"))
         return handleWrite(source, request);
+    if (request.value(QStringLiteral("op")) == QStringLiteral("tech-create"))
+        return handleTechCreate(source, request);
     if (request.value(QStringLiteral("op")) == QStringLiteral("mods-create"))
         return handleModsCreate(source, request);
     if (request.value(QStringLiteral("op")) == QStringLiteral("diff"))

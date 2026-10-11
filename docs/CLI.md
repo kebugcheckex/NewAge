@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 4. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type and effect command Mode, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 is done: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is measured in section 3. P2 is done: `set`, `apply` (with `--expect` and `--dry-run`), `mods create` and the mod-only save rule are in the code, with the skill's write rules; `cli_test`, `cli_process_test` and `api_test` cover conflicts, atomic patches and the game-data guard. P3 has started: `diff` is in the code (section 6.6); `compare-civs` and `refs` are next. Effects and the remaining tech fields are editable, text fields included, and an effect's `command_count` adds and removes commands (section 8).
+Status: proposal, revision 4. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type and effect command Mode, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 is done: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is measured in section 3. P2 is done: `set`, `apply` (with `--expect` and `--dry-run`), `mods create` and the mod-only save rule are in the code, with the skill's write rules; `cli_test`, `cli_process_test` and `api_test` cover conflicts, atomic patches and the game-data guard. P3 has started: `diff` is in the code (section 6.6); `compare-civs` and `refs` are next. Effects and the remaining tech fields are editable, text fields included, and an effect's `command_count` adds and removes commands (section 8). The first `tech create` slice is described in [the tech creation plan](cli-tech-create.md).
 
 ## 1. Goal
 
@@ -378,7 +378,7 @@ The CLI reads and writes exactly what the descriptor tables describe, so the GUI
 
 Effect commands are the exception. Nothing refers to a command by position, so `command_count` resizes the list at the end: new commands have no type (255) and unused parameters (-1, amount 0), and shrinking drops the last ones. A new command's parameters are written after its type (section 6.3). A parameter its type doesn't use is hidden in `get` but can still be written, because the type that uses it may come later in the same patch. Fixed-size slots work the same way: a tech's unused required tech or cost entry can be filled in.
 
-**Adding entities** (a new tech or effect) is not supported. Writing into an unused slot is: a tech with no effect and an effect with no commands are free, and filling one in through a patch makes it a new tech or effect.
+**Adding entities** (a new tech or effect) is not supported. Writing into an unused slot is: a tech with no effect and an effect with no commands are free, and filling one in through a patch makes it a new tech or effect. The proposed CLI workflow for appending a civ-specific tech, its effect, and locale strings is in [CLI creation of civilization-specific technologies](cli-tech-create.md).
 
 ## 9. The agent skill
 
@@ -427,6 +427,7 @@ The GUI keeps data in memory and doesn't watch the file. If the CLI saves a mod'
 | P2 (done) | Writes: `set`, `apply`, `--expect`, `--dry-run`, `mods create`, mod-only save rule; the skill file | Tests for conflicts, atomic patches and the game-data guard; round-trip test passes after a no-op save; skill tried on real requests |
 | P3 (`diff` done) | `compare-civs`, `refs`, `diff` (all read-only) | `cli_test` covers each command |
 | Fields (effects and techs done) | Section 8: editable effects and command counts, the remaining tech fields, text fields, sequential `apply` | `model_test` covers each descriptor; `cli_test` builds a tech and its effect in one patch and checks that a failed patch restores everything |
+| Tech creation (proposed) | Append a tech and effect in a mod through `tech create`, with validation and locale strings; see [the detailed plan](cli-tech-create.md) | Both modes reload correctly, dry-run and failure leave files unchanged, strings do not collide, and the new tech works only for its civ in game |
 
 Field coverage (section 8) grows alongside, in the GUI and the CLI together.
 
@@ -439,7 +440,7 @@ Not in this plan, but the design leaves room for each:
 - **Three-way `diff`** against a saved copy of the game's older `.dat` (`--base FILE`), to tell the mod's own edits from the game's later updates, and a patch of the mod's edits to replay onto a fresh mod with `apply`.
 - **Using the GUI's last game folder and mod** from `QSettings` as defaults for the CLI.
 - **Writing original game files**, which would at least need a backup and restore story. Out of scope.
-- **Adding and removing entries** in unit lists (section 8), and adding whole entities. Needs a separate discussion.
+- **Adding and removing entries** in unit lists (section 8), and adding whole entities other than the proposed tech/effect workflow. Needs a separate discussion.
 
 ## 13. Open questions
 

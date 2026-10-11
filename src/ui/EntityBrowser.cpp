@@ -4,6 +4,7 @@
 
 #include <QAbstractSlider>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QHeaderView>
@@ -19,6 +20,7 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStyledItemDelegate>
+#include <QTimer>
 #include <QTreeView>
 #include <QVBoxLayout>
 
@@ -28,6 +30,7 @@
 #include "genie/dat/DatFile.h"
 #include "genie/dat/Unit.h"
 #include "model/EntityListModel.h"
+#include "model/EffectListModel.h"
 #include "model/FieldTreeModel.h"
 #include "model/ListFilterModel.h"
 #include "model/TechListModel.h"
@@ -243,6 +246,15 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->addWidget(civCombo_);
     leftLayout->addWidget(filterEdit_);
+    if (qobject_cast<TechListModel *>(listModel_) || qobject_cast<EffectListModel *>(listModel_))
+    {
+        showUnused_ = new QCheckBox(tr("Show unused fields"), left);
+        leftLayout->addWidget(showUnused_);
+        connect(showUnused_, &QCheckBox::toggled, this, [this](bool checked) {
+            fieldModel_->setIncludeUnused(checked);
+            showSelected();
+        });
+    }
     leftLayout->addWidget(listView_);
 
     auto *splitter = new QSplitter(this);
@@ -289,6 +301,12 @@ EntityBrowser::EntityBrowser(Session *session, Config *config, EntityListModel *
         for (int row = 0; row < fieldModel_->rowCount(); ++row)
             fieldView_->setFirstColumnSpanned(row, {}, true);
         fieldView_->expandAll();
+    });
+    connect(fieldModel_, &FieldTreeModel::fieldEdited, this, [this](const QString &key) {
+        if ((qobject_cast<EffectListModel *>(listModel_)
+             && (key == QStringLiteral("command_count") || key.endsWith(QStringLiteral(".type"))))
+            || (qobject_cast<TechListModel *>(listModel_) && key.startsWith(QStringLiteral("language_"))))
+            QTimer::singleShot(0, this, [this] { showSelected(); });
     });
     connect(fieldView_->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this](const QModelIndex &current) {
@@ -350,6 +368,11 @@ int EntityBrowser::selectedRow() const
     return current.isValid() ? listFilter_->mapToSource(current).row() : -1;
 }
 
+int EntityBrowser::civ() const
+{
+    return listModel_->civ();
+}
+
 void EntityBrowser::selectRow(int row)
 {
     const QModelIndex index = listFilter_->mapFromSource(listModel_->index(row));
@@ -365,6 +388,17 @@ void EntityBrowser::selectEntity(int id)
         return;
     filterEdit_->clear();
     selectRow(id);
+}
+
+void EntityBrowser::selectCiv(int civ)
+{
+    if (civ >= 0 && civ < civCombo_->count())
+        civCombo_->setCurrentIndex(civ);
+}
+
+void EntityBrowser::refreshEntities()
+{
+    showCiv(civCombo_->currentIndex());
 }
 
 void EntityBrowser::applyConfig()

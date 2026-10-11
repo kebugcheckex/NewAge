@@ -3,17 +3,21 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <limits>
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QLockFile>
 #include <QRegularExpression>
 #include <QSet>
 
 #include "core/Mods.h"
 #include "core/VersionProfile.h"
 #include "genie/dat/DatFile.h"
+#include "model/EffectFields.h"
 #include "model/RefNames.h"
 
 namespace newage {
@@ -26,6 +30,17 @@ ServiceError makeError(const QString &code, const QString &message)
     error.code = code;
     error.message = message;
     return error;
+}
+
+QByteArray fileFingerprint(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!hash.addData(&file))
+        return {};
+    return hash.result();
 }
 
 ServiceError editError(const FieldEdit &edit, const QString &code, const QString &message)
@@ -488,6 +503,8 @@ void DataService::close()
     savePath_.clear();
     warnings_.clear();
     loose_ = false;
+    sourceFingerprint_.clear();
+    saveExistedAtOpen_ = false;
 }
 
 OpenResult DataService::open(const DataSource &source)
@@ -529,6 +546,7 @@ OpenResult DataService::open(const DataSource &source)
         return fail(error->code, error->message);
 
     GameDataset opened = gameDataset_;
+    bool selectedModExists = false;
     if (!in.mod.isEmpty())
     {
         if (!supportsMods(gameDataset_))
@@ -542,13 +560,29 @@ OpenResult DataService::open(const DataSource &source)
         modDir_ = dir;
         savePath_ = path;
         opened = modDataset(gameDataset_, modDir_, in.locale);
-        if (!QFileInfo::exists(opened.datPath))
+        selectedModExists = QFileInfo::exists(opened.datPath);
+        if (!selectedModExists)
             opened.datPath = gameDataset_.datPath;
     }
 
+    const bool beforeSaveExists = !savePath_.isEmpty() && QFileInfo::exists(savePath_);
+    if (!modDir_.isEmpty() && beforeSaveExists != selectedModExists)
+        return fail(QStringLiteral("conflict"), QStringLiteral("The mod data changed while it was opening."));
+    const QByteArray beforeOpen = modDir_.isEmpty() ? QByteArray() : fileFingerprint(opened.datPath);
+    if (!modDir_.isEmpty() && beforeOpen.isEmpty())
+        return fail(QStringLiteral("load_failed"), QStringLiteral("Couldn't read the source data file."));
     QString error;
     if (!session_.open(opened, &error, &warnings_))
         return fail(QStringLiteral("load_failed"), error);
+    if (!modDir_.isEmpty())
+    {
+        sourceFingerprint_ = fileFingerprint(session_.datPath());
+        if (sourceFingerprint_ != beforeOpen)
+            return fail(QStringLiteral("conflict"), QStringLiteral("The source data changed while it was loading."));
+        if (QFileInfo::exists(savePath_) != beforeSaveExists)
+            return fail(QStringLiteral("conflict"), QStringLiteral("The mod data changed while it was loading."));
+    }
+    saveExistedAtOpen_ = beforeSaveExists;
 
     OpenResult result;
     result.ok = true;
@@ -839,8 +873,184 @@ ApplyResult DataService::apply(const QList<FieldEdit> &edits, bool dryRun)
     if (!session_.saveAs(savePath_, &saveError))
         return fail(makeError(QStringLiteral("save_failed"), saveError));
 
+    sourceFingerprint_ = fileFingerprint(savePath_);
+    saveExistedAtOpen_ = true;
     result.ok = true;
     result.saved = QDir::fromNativeSeparators(QDir::cleanPath(savePath_));
+    return result;
+}
+
+CreateTechResult DataService::createTech(const CreateTechSpec &spec, bool dryRun)
+{
+    CreateTechResult result;
+    const auto fail = [&](const QString &code, const QString &message) {
+        result.error = makeError(code, message);
+        return result;
+    };
+    if (const ServiceError blocked = writeGuard(); !blocked.code.isEmpty())
+    {
+        result.error = blocked;
+        return result;
+    }
+    genie::DatFile &dat = *session_.dat();
+    const int techCount = static_cast<int>(dat.Techs.size());
+    const int effectCount = static_cast<int>(dat.Effects.size());
+    if (spec.expectedTechCount && *spec.expectedTechCount != techCount)
+        return fail(QStringLiteral("conflict"), QStringLiteral("Tech count is %1, not %2.").arg(techCount).arg(*spec.expectedTechCount));
+    if (spec.expectedEffectCount && *spec.expectedEffectCount != effectCount)
+        return fail(QStringLiteral("conflict"), QStringLiteral("Effect count is %1, not %2.").arg(effectCount).arg(*spec.expectedEffectCount));
+    const QString fileVersion = QString::fromLatin1(dat.FileVersion.c_str());
+    if (!spec.expectedFileVersion.isEmpty() && spec.expectedFileVersion != fileVersion)
+        return fail(QStringLiteral("conflict"), QStringLiteral("File version is %1, not %2.").arg(fileVersion, spec.expectedFileVersion));
+    result.sourceFingerprint = QString::fromLatin1(sourceFingerprint_.toHex());
+    if (!spec.expectedSourceFingerprint.isEmpty() && spec.expectedSourceFingerprint != result.sourceFingerprint)
+        return fail(QStringLiteral("conflict"), QStringLiteral("The source fingerprint does not match."));
+    if (techCount >= std::numeric_limits<int16_t>::max())
+        return fail(QStringLiteral("out_of_range"), QStringLiteral("The serialized 16-bit tech count is full."));
+    if (effectCount > std::numeric_limits<int16_t>::max())
+        return fail(QStringLiteral("out_of_range"), QStringLiteral("The new effect ID cannot fit in Tech::EffectID."));
+    if (spec.civ < 0 || spec.civ >= static_cast<int>(dat.Civs.size()) || spec.civ > std::numeric_limits<int16_t>::max())
+        return fail(QStringLiteral("unknown_entity"), QStringLiteral("No civ %1.").arg(spec.civ));
+
+    const auto validName = [](const QString &name, int maxBytes) {
+        const QByteArray latin1 = name.toLatin1();
+        return !name.isEmpty() && name == name.trimmed() && QString::fromLatin1(latin1) == name
+               && latin1.size() <= maxBytes;
+    };
+    if (!validName(spec.internalName, 255) || !validName(spec.effectInternalName, 30))
+        return fail(QStringLiteral("bad_value"), QStringLiteral("Internal names must be non-empty Latin-1 text without surrounding spaces (tech: 255 bytes; effect: 30 bytes)."));
+    for (const genie::Tech &existing : dat.Techs)
+    {
+        if (QString::fromLatin1(existing.Name).compare(spec.internalName, Qt::CaseInsensitive) == 0)
+            return fail(QStringLiteral("bad_value"), QStringLiteral("A tech already has this internal name."));
+    }
+    for (const genie::Effect &existing : dat.Effects)
+    {
+        if (QString::fromLatin1(existing.Name).compare(spec.effectInternalName, Qt::CaseInsensitive) == 0)
+            return fail(QStringLiteral("bad_value"), QStringLiteral("An effect already has this internal name."));
+    }
+    genie::Tech newTechTemplate;
+    newTechTemplate.setGameVersion(session_.gameVersion());
+    if (static_cast<std::size_t>(spec.prerequisites.size()) > newTechTemplate.RequiredTechs.size())
+        return fail(QStringLiteral("out_of_range"), QStringLiteral("Too many prerequisites for this game version."));
+    QSet<int> prerequisites;
+    for (int id : spec.prerequisites)
+    {
+        if (id < 0 || id >= techCount)
+            return fail(QStringLiteral("unknown_entity"), QStringLiteral("No prerequisite tech %1.").arg(id));
+        if (prerequisites.contains(id))
+            return fail(QStringLiteral("bad_value"), QStringLiteral("Prerequisite tech %1 is repeated.").arg(id));
+        prerequisites.insert(id);
+    }
+    if (spec.commands.isEmpty() || spec.commands.size() > std::numeric_limits<int16_t>::max())
+        return fail(QStringLiteral("out_of_range"), QStringLiteral("An effect needs 1 to 32767 commands."));
+    const QList<int> classes = fixedRefIds(session_.gameVersion(), RefKind::UnitClass);
+    const QList<int> attributes = fixedRefIds(session_.gameVersion(), RefKind::Attribute);
+    for (int index = 0; index < spec.commands.size(); ++index)
+    {
+        const AttributeCommand &command = spec.commands[index];
+        const QString prefix = QStringLiteral("Command %1: ").arg(index + 1);
+        if (command.type != 0 && command.type != 4 && command.type != 5)
+            return fail(QStringLiteral("bad_value"), prefix + QStringLiteral("only attribute effect types 0, 4, and 5 are supported."));
+        if (command.unit < -1 || command.unitClass < -1 || command.unit > std::numeric_limits<int16_t>::max()
+            || command.unitClass > std::numeric_limits<int16_t>::max())
+            return fail(QStringLiteral("bad_value"), prefix + QStringLiteral("unit and class must be -1 or valid IDs."));
+        if (command.unit < 0 && command.unitClass < 0)
+            return fail(QStringLiteral("bad_value"), prefix + QStringLiteral("a unit or class is required."));
+        if (command.unit >= 0 && !unitKind().isActive(session_, spec.civ, command.unit))
+            return fail(QStringLiteral("unknown_entity"), prefix + QStringLiteral("unit %1 does not exist for civ %2.").arg(command.unit).arg(spec.civ));
+        if (command.unitClass >= 0 && !classes.contains(command.unitClass))
+            return fail(QStringLiteral("unknown_entity"), prefix + QStringLiteral("class %1 does not exist.").arg(command.unitClass));
+        if (!attributes.contains(command.attribute))
+            return fail(QStringLiteral("unknown_entity"), prefix + QStringLiteral("attribute %1 does not exist.").arg(command.attribute));
+        if (!std::isfinite(command.amount) || !std::isfinite(static_cast<float>(command.amount)))
+            return fail(QStringLiteral("out_of_range"), prefix + QStringLiteral("amount is not a finite float."));
+    }
+    const int treeId = dat.Civs[spec.civ].TechTreeID;
+    if (treeId >= 0 && treeId < effectCount)
+    {
+        for (const genie::EffectCommand &command : dat.Effects[treeId].EffectCommands)
+        {
+            if (command.Type == 102 && command.D == static_cast<float>(techCount))
+                return fail(QStringLiteral("bad_value"), QStringLiteral("The civ tech tree disables the new tech ID %1.").arg(techCount));
+        }
+    }
+
+    const bool wasModified = session_.isModified();
+    const auto restore = [&] {
+        dat.Techs.resize(static_cast<std::size_t>(techCount));
+        dat.Effects.resize(static_cast<std::size_t>(effectCount));
+        session_.setModified(wasModified);
+    };
+    dat.Effects.emplace_back();
+    genie::Effect &effect = dat.Effects.back();
+    effect.Name = spec.effectInternalName.toLatin1().toStdString();
+    effect.EffectCommands.reserve(static_cast<std::size_t>(spec.commands.size()));
+    for (const AttributeCommand &input : spec.commands)
+    {
+        genie::EffectCommand command;
+        command.Type = static_cast<uint8_t>(input.type);
+        command.A = static_cast<int16_t>(input.unit);
+        command.B = static_cast<int16_t>(input.unitClass);
+        command.C = static_cast<int16_t>(input.attribute);
+        command.D = static_cast<float>(input.amount);
+        effect.EffectCommands.push_back(command);
+    }
+    effect.setGameVersion(session_.gameVersion());
+
+    dat.Techs.emplace_back();
+    genie::Tech &tech = dat.Techs.back();
+    tech.setGameVersion(session_.gameVersion());
+    tech.Name = spec.internalName.toLatin1().toStdString();
+    tech.Civ = static_cast<int16_t>(spec.civ);
+    tech.EffectID = static_cast<int16_t>(effectCount);
+    tech.LanguageDLLName = -1;
+    tech.LanguageDLLDescription = -1;
+    tech.LanguageDLLHelp = -1;
+    tech.LanguageDLLTechTree = -1;
+    tech.RequiredTechCount = static_cast<int16_t>(spec.prerequisites.size());
+    for (int index = 0; index < spec.prerequisites.size(); ++index)
+        tech.RequiredTechs[static_cast<std::size_t>(index)] = static_cast<int16_t>(spec.prerequisites[index]);
+    session_.setModified(true);
+    result.techId = techCount;
+    result.effectId = effectCount;
+    result.techFields = techKind().fields(session_, spec.civ, techCount);
+    result.effectFields = effectKind().fields(session_, spec.civ, effectCount);
+    if (dryRun)
+    {
+        restore();
+        result.ok = true;
+        return result;
+    }
+
+    const QString directory = QFileInfo(savePath_).absolutePath();
+    if (!QDir().mkpath(directory))
+    {
+        restore();
+        return fail(QStringLiteral("save_failed"), QStringLiteral("Couldn't create %1.").arg(QDir::toNativeSeparators(directory)));
+    }
+    QLockFile lock(savePath_ + QStringLiteral(".lock"));
+    if (!lock.tryLock())
+    {
+        restore();
+        return fail(QStringLiteral("conflict"), QStringLiteral("Another process holds the mod data lock."));
+    }
+    if (sourceFingerprint_.isEmpty() || fileFingerprint(session_.datPath()) != sourceFingerprint_
+        || QFileInfo::exists(savePath_) != saveExistedAtOpen_)
+    {
+        restore();
+        return fail(QStringLiteral("conflict"), QStringLiteral("The source data changed since it was opened."));
+    }
+    QString saveError;
+    if (!session_.saveAs(savePath_, &saveError))
+    {
+        restore();
+        return fail(QStringLiteral("save_failed"), saveError);
+    }
+    saveExistedAtOpen_ = true;
+    sourceFingerprint_ = fileFingerprint(savePath_);
+    result.saved = QDir::fromNativeSeparators(QDir::cleanPath(savePath_));
+    result.ok = true;
     return result;
 }
 

@@ -138,20 +138,27 @@ bool FieldTreeModel::setData(const QModelIndex &index, const QVariant &value, in
     if (role != Qt::EditRole || !(flags(index) & Qt::ItemIsEditable))
         return false;
 
-    Row &row = groups_[static_cast<int>(index.internalId() - 1)].rows[index.row()];
+    const Row row = groups_[static_cast<int>(index.internalId() - 1)].rows[index.row()];
     const ParsedField parsed = parseFieldValue({row.value.typeId(), row.minimum, row.maximum}, value);
     if (!parsed.value.isValid())
         return false;
     // Leave the data (and its modified state) alone when nothing changes.
     if (parsed.value == row.value)
         return true;
+    const QPersistentModelIndex current(index);
     const QVariant stored = writer_(row.field, parsed.value);
     if (!stored.isValid())
         return false;
-    row.value = stored;
-    if (row.ref != RefKind::None && refNamer_)
-        row.label = refNamer_(row.ref, stored.toInt());
-    emit dataChanged(index, index);
+    if (current.isValid())
+    {
+        Row &updated = groups_[static_cast<int>(current.internalId() - 1)].rows[current.row()];
+        updated.value = stored;
+        if (updated.ref != RefKind::None && refNamer_)
+            updated.label = refNamer_(updated.ref, stored.toInt());
+        emit dataChanged(current, current);
+    }
+    if (!row.key.isEmpty())
+        emit fieldEdited(row.key);
     return true;
 }
 

@@ -330,7 +330,7 @@ void ModelTest::sampleUnitValues()
         trainName = QString::fromLatin1(building->Name);
     QVERIFY(!trainName.isEmpty());
     QCOMPARE(fieldText(fields, QStringLiteral("Train location")), QStringLiteral("%1 (%2)").arg(trainName).arg(trainAt));
-    QVERIFY(!fieldIndex(fields, QStringLiteral("Cost 3 resource")).isValid());
+    QCOMPARE(fieldText(fields, QStringLiteral("Cost 3 resource")), QStringLiteral("Population Headroom (4)"));
 
     // Empty slots are listed but can't be selected.
     const auto &pointers = session.dat()->Civs.at(1).UnitPointers;

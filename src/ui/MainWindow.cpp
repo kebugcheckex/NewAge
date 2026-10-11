@@ -28,14 +28,17 @@
 #include "core/Mods.h"
 #include "core/Session.h"
 #include "core/VersionProfile.h"
+#include "api/DataService.h"
 #include "genie/dat/DatFile.h"
 #include "model/EffectListModel.h"
 #include "model/TechListModel.h"
 #include "model/UnitListModel.h"
 #include "ui/EntityBrowser.h"
+#include "ui/DiffDialog.h"
 #include "ui/ModsDialog.h"
 #include "ui/ModsPanel.h"
 #include "ui/OptionsDialog.h"
+#include "ui/TechCreateDialog.h"
 
 namespace newage {
 
@@ -101,9 +104,9 @@ MainWindow::MainWindow(Config *config, QWidget *parent)
 {
     placeholder_->setAlignment(Qt::AlignCenter);
     pages_->addWidget(placeholder_);
-    browsers_->addTab(new EntityBrowser(session_, config_, new UnitListModel(session_), &Config::hideEmptyUnits,
-                                        tr("Filter units")),
-                      tr("&Units"));
+    unitsBrowser_ = new EntityBrowser(session_, config_, new UnitListModel(session_), &Config::hideEmptyUnits,
+                                      tr("Filter units"), this);
+    browsers_->addTab(unitsBrowser_, tr("&Units"));
     techBrowser_ = new EntityBrowser(session_, config_, new TechListModel(session_), &Config::hideUnavailableTechs,
                                      tr("Filter techs"), this);
     effectsBrowser_ = new EntityBrowser(session_, config_, new EffectListModel(session_), nullptr,
@@ -114,6 +117,8 @@ MainWindow::MainWindow(Config *config, QWidget *parent)
         browsers_->setCurrentWidget(effectsBrowser_);
         effectsBrowser_->selectEntity(id);
     });
+    connect(effectsBrowser_->model(), &QAbstractItemModel::dataChanged, techBrowser_,
+            &EntityBrowser::refreshEntities);
     pages_->addWidget(browsers_);
     setCentralWidget(pages_);
     statusBar()->addPermanentWidget(fileInfo_);
@@ -184,6 +189,8 @@ void MainWindow::createActions()
     viewMenu->addAction(modsAction);
 
     QMenu *toolsMenu = menuBar()->addMenu(tr("&Tools"));
+    diffAction_ = toolsMenu->addAction(tr("Compare Mod with Game..."), this, &MainWindow::showModDiff);
+    createTechAction_ = toolsMenu->addAction(tr("New Automatic Tech..."), this, &MainWindow::createTech);
     QAction *optionsAction = toolsMenu->addAction(tr("&Options..."), this, &MainWindow::showOptions);
     optionsAction->setShortcut(QKeySequence::Preferences);
     optionsAction->setMenuRole(QAction::PreferencesRole);
@@ -592,6 +599,147 @@ void MainWindow::showOptions()
                              tr("%1\n\nThe new options apply until NewAge is closed.").arg(error));
 }
 
+void MainWindow::showModDiff()
+{
+    if (modDir_.isEmpty())
+        return;
+    if (session_->isModified() && !saveFile())
+        return;
+    DataSource source;
+    source.gameDir = gameDataset_.gameDir;
+    source.dataset = QFileInfo(gameDataset_.datPath).fileName();
+    source.mod = modDir_;
+    source.modsFolder = modsPanel_->modsFolder();
+    source.locale = kLocale;
+    statusBar()->showMessage(tr("Comparing mod with game..."));
+    LoadDialog progress(tr("Comparing mod with game..."), this);
+    progress.show();
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    OpenResult opened;
+    DiffResult comparison;
+    QEventLoop loop;
+    auto *thread = QThread::create([&] {
+        try
+        {
+            DataService service;
+            opened = service.open(source);
+            if (opened.ok)
+                comparison = service.diff({});
+        }
+        catch (const std::exception &error)
+        {
+            opened.error.message = QString::fromLocal8Bit(error.what());
+        }
+    });
+    connect(thread, &QThread::finished, &loop, &QEventLoop::quit);
+    thread->start();
+    loop.exec();
+    thread->wait();
+    delete thread;
+    progress.hide();
+    statusBar()->clearMessage();
+    if (!opened.ok || !comparison.ok)
+    {
+        QMessageBox::critical(this, tr("Comparison failed"), opened.ok ? comparison.error.message : opened.error.message);
+        return;
+    }
+    DiffDialog dialog(comparison, this);
+    connect(&dialog, &DiffDialog::entityActivated, this, [this, &dialog](const QString &kind, int id, int civ) {
+        EntityBrowser *browser = kind == QStringLiteral("unit") ? unitsBrowser_
+                                 : kind == QStringLiteral("tech") ? techBrowser_
+                                 : kind == QStringLiteral("effect") ? effectsBrowser_ : nullptr;
+        if (!browser)
+            return;
+        if (civ >= 0)
+            browser->selectCiv(civ);
+        browsers_->setCurrentWidget(browser);
+        browser->selectEntity(id);
+        dialog.accept();
+    });
+    dialog.exec();
+}
+
+void MainWindow::createTech()
+{
+    if (modDir_.isEmpty() || !session_->isOpen())
+        return;
+    if (session_->isModified() && !saveFile())
+        return;
+    TechCreateDialog dialog(*session_, techBrowser_->civ(), this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const CreateTechSpec spec = dialog.spec();
+    DataSource source;
+    source.gameDir = gameDataset_.gameDir;
+    source.dataset = QFileInfo(gameDataset_.datPath).fileName();
+    source.mod = modDir_;
+    source.modsFolder = modsPanel_->modsFolder();
+    source.locale = kLocale;
+    LoadDialog progress(tr("Validating new tech..."), this);
+    progress.show();
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    OpenResult opened;
+    CreateTechResult preview;
+    CreateTechResult created;
+    bool confirmed = false;
+    QEventLoop loop;
+    auto *thread = QThread::create([&] {
+        try
+        {
+            DataService service;
+            opened = service.open(source);
+            if (!opened.ok)
+                return;
+            preview = service.createTech(spec, true);
+            if (!preview.ok)
+                return;
+            QMetaObject::invokeMethod(this, [&] {
+                progress.hide();
+                confirmed = QMessageBox::question(this, tr("Create automatic tech"),
+                                                   tr("Create tech %1 and effect %2 for civilization %3 in %4?")
+                                                       .arg(preview.techId).arg(preview.effectId).arg(spec.civ)
+                                                       .arg(modTitle_), QMessageBox::Yes | QMessageBox::Cancel,
+                                                   QMessageBox::Cancel) == QMessageBox::Yes;
+                if (confirmed)
+                {
+                    progress.setLabelText(tr("Saving new tech..."));
+                    progress.show();
+                }
+            }, Qt::BlockingQueuedConnection);
+            if (confirmed)
+                created = service.createTech(spec);
+        }
+        catch (const std::exception &error)
+        {
+            opened.error.message = QString::fromLocal8Bit(error.what());
+            opened.ok = false;
+        }
+    });
+    connect(thread, &QThread::finished, &loop, &QEventLoop::quit);
+    thread->start();
+    loop.exec();
+    thread->wait();
+    delete thread;
+    progress.hide();
+    if (!opened.ok || !preview.ok || (confirmed && !created.ok))
+    {
+        const QString message = !opened.ok ? opened.error.message : !preview.ok ? preview.error.message : created.error.message;
+        QMessageBox::critical(this, tr("Tech creation failed"), message);
+        return;
+    }
+    if (!confirmed)
+        return;
+    const int techId = created.techId;
+    const QString createdModDir = modDir_;
+    if (loadMod(createdModDir))
+    {
+        browsers_->setCurrentWidget(techBrowser_);
+        techBrowser_->selectCiv(spec.civ);
+        techBrowser_->selectEntity(techId);
+        modsPanel_->reload();
+    }
+}
+
 bool MainWindow::confirmDiscardChanges()
 {
     if (!session_->isModified())
@@ -621,6 +769,8 @@ void MainWindow::refresh()
     saveAction_->setEnabled(session_->isOpen() && (session_->isModified() || modDatMissing));
     saveAsAction_->setEnabled(session_->isOpen());
     saveAsModAction_->setEnabled(canUseMods());
+    diffAction_->setEnabled(canUseMods() && !modDir_.isEmpty());
+    createTechAction_->setEnabled(canUseMods() && !modDir_.isEmpty());
 
     const bool hasMods = supportsMods(gameDataset_);
     modsDock_->toggleViewAction()->setEnabled(hasMods);

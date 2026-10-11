@@ -108,6 +108,8 @@ endfunction()
 
 # --- ui: Qt Widgets front end -------------------------------------------------
 add_library(newage_ui STATIC
+  src/ui/DiffDialog.cpp
+  src/ui/DiffDialog.h
   src/ui/EntityBrowser.cpp
   src/ui/EntityBrowser.h
   src/ui/MainWindow.cpp
@@ -118,8 +120,10 @@ add_library(newage_ui STATIC
   src/ui/ModsPanel.h
   src/ui/OptionsDialog.cpp
   src/ui/OptionsDialog.h
+  src/ui/TechCreateDialog.cpp
+  src/ui/TechCreateDialog.h
 )
-target_link_libraries(newage_ui PUBLIC newage_model Qt6::Widgets)
+target_link_libraries(newage_ui PUBLIC newage_api Qt6::Widgets)
 
 # --- app ----------------------------------------------------------------------
 qt_add_executable(NewAge WIN32

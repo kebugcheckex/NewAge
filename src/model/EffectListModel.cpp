@@ -44,9 +44,23 @@ void EffectListModel::showFields(int row, FieldTreeModel &fields)
         return;
     }
 
+    const auto descriptors = effectFields(*e, session()->gameVersion());
+    QStringList keys;
+    for (const auto &descriptor : descriptors)
+        keys.append(descriptor.key);
+    const auto writer = [this, row, keys](int field, const QVariant &value) -> QVariant {
+        if (field < 0 || field >= keys.size())
+            return {};
+        const SetResult result = effectKind().set(*session(), civ(), row, keys.at(field), value);
+        if (!result.ok)
+            return {};
+        if (result.changed)
+            entityEdited(row);
+        return result.newValue;
+    };
     const auto refNamer = [this](RefKind kind, int id) { return refName(*session(), kind, id, civ()); };
-    fields.setObject(effectFields(*e, session()->gameVersion()), EffectRef{row, session()->dat()->Effects.at(row)},
-                     nullptr, {}, refNamer);
+    fields.setObject(descriptors, EffectRef{row, session()->dat()->Effects.at(row)},
+                     nullptr, writer, refNamer, fields.includeUnused());
 }
 
 bool EffectListModel::isActive(int row) const

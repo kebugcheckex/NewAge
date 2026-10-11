@@ -40,7 +40,9 @@ struct HandlerResult
 // (each edit is a set request without `op`) return `{"saved", "changes",
 // "unchanged"}` (docs/cli.md, section 6.2), and need the source's mod.
 // `{"op": "mods-create", "title": "T", "author"?, "description"?, "from"?}` makes
-// a mod without loading data. None of the three can be in a batch.
+// a mod without loading data. `{"op": "tech-create", "spec": {...}, "dryRun"?: true}`
+// creates an automatic civ tech and a new effect. None of these writes can be
+// in a batch.
 // `{"op": "diff", "kind"?: "unit", "civ"?: 1, "fields"?: [...], "offset"?: 0,
 // "limit"?: 50}` compares the source's mod with the game's data (docs/cli.md,
 // section 6.6). It needs a mod, writes nothing, and can't be in a batch.

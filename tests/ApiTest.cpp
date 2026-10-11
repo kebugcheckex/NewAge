@@ -59,6 +59,7 @@ private slots:
     void unchangedAndDryRunDoNotSave();
     void expectMismatchIsConflict();
     void unsupportedDatasetRejectsMod();
+    void createAutomaticTechAppendsAndRollsBack();
 };
 
 void ApiTest::resolveSourceReadsEnvironment()
@@ -396,6 +397,103 @@ void ApiTest::unsupportedDatasetRejectsMod()
     source.mod = QStringLiteral("Balance");
     DataService service;
     QCOMPARE(service.open(source).error.code, QStringLiteral("mods_unsupported"));
+}
+
+void ApiTest::createAutomaticTechAppendsAndRollsBack()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    const QString gameDat = game.filePath(QStringLiteral("resources/_common/dat/empires2_x2_p1.dat"));
+    QVERIFY(QDir().mkpath(QFileInfo(gameDat).absolutePath()));
+    QVERIFY(QFile::copy(kHdDat, gameDat));
+    QVERIFY(writeFile(game.path(), QStringLiteral("resources/_common/dat/empires2_x1_p1.dat")));
+    DataSource source;
+    source.gameDir = game.path();
+    DataService probe;
+    QVERIFY(probe.open(source).ok);
+    QString error;
+    QVERIFY2(!createMod(modsFolders(probe.dataset()).at(0), {QStringLiteral("New Tech"), {}, {}}, &error).isEmpty(),
+             qPrintable(error));
+    source.mod = QStringLiteral("New Tech");
+    DataService service;
+    const OpenResult opened = service.open(source);
+    QVERIFY2(opened.ok, qPrintable(opened.error.message));
+    const int techCount = static_cast<int>(service.session().dat()->Techs.size());
+    const int effectCount = static_cast<int>(service.session().dat()->Effects.size());
+    CreateTechSpec spec;
+    spec.civ = 6;
+    spec.internalName = QStringLiteral("NewAge Test Bonus");
+    spec.effectInternalName = QStringLiteral("NewAge Test Bonus Effect");
+    spec.commands.append({5, -1, 4, 13, 1.5});
+    spec.expectedTechCount = techCount;
+    spec.expectedEffectCount = effectCount;
+    spec.expectedFileVersion = QString::fromLatin1(service.session().dat()->FileVersion.c_str());
+
+    const CreateTechResult dry = service.createTech(spec, true);
+    QVERIFY2(dry.ok, qPrintable(dry.error.message));
+    QCOMPARE(dry.techId, techCount);
+    QCOMPARE(dry.effectId, effectCount);
+    QVERIFY(dry.saved.isEmpty());
+    QCOMPARE(static_cast<int>(service.session().dat()->Techs.size()), techCount);
+    QCOMPARE(static_cast<int>(service.session().dat()->Effects.size()), effectCount);
+    QVERIFY(!service.session().isModified());
+    QVERIFY(!QFile::exists(service.savePath()));
+
+    CreateTechSpec bad = spec;
+    bad.prerequisites = {techCount};
+    QCOMPARE(service.createTech(bad).error.code, QStringLiteral("unknown_entity"));
+    bad = spec;
+    bad.commands[0].attribute = 99999;
+    QCOMPARE(service.createTech(bad).error.code, QStringLiteral("unknown_entity"));
+    QCOMPARE(static_cast<int>(service.session().dat()->Techs.size()), techCount);
+    QVERIFY(!QFile::exists(service.savePath()));
+
+    QFile blocker(QDir(service.modDir()).filePath(QStringLiteral("resources")));
+    QVERIFY(blocker.open(QIODevice::WriteOnly));
+    blocker.close();
+    QCOMPARE(service.createTech(spec).error.code, QStringLiteral("save_failed"));
+    QCOMPARE(static_cast<int>(service.session().dat()->Techs.size()), techCount);
+    QCOMPARE(static_cast<int>(service.session().dat()->Effects.size()), effectCount);
+    QVERIFY(!service.session().isModified());
+    QVERIFY(blocker.remove());
+
+    const CreateTechResult created = service.createTech(spec);
+    QVERIFY2(created.ok, qPrintable(created.error.message));
+    QCOMPARE(created.techId, techCount);
+    QCOMPARE(created.effectId, effectCount);
+    QVERIFY(QFile::exists(created.saved));
+    QVERIFY(!service.session().isModified());
+    const CreateTechResult repeated = service.createTech(spec);
+    QCOMPARE(repeated.error.code, QStringLiteral("conflict"));
+
+    DataService reloaded;
+    const OpenResult reopened = reloaded.open(source);
+    QVERIFY2(reopened.ok, qPrintable(reopened.error.message));
+    const genie::DatFile &dat = *reloaded.session().dat();
+    QCOMPARE(static_cast<int>(dat.Techs.size()), techCount + 1);
+    QCOMPARE(static_cast<int>(dat.Effects.size()), effectCount + 1);
+    const genie::Tech &tech = dat.Techs.at(techCount);
+    QCOMPARE(tech.Civ, static_cast<int16_t>(6));
+    QCOMPARE(tech.EffectID, static_cast<int16_t>(effectCount));
+    QCOMPARE(tech.RequiredTechCount, static_cast<int16_t>(0));
+    QCOMPARE(tech.ResearchLocations.front().LocationID, static_cast<int16_t>(-1));
+    QCOMPARE(dat.Effects.at(effectCount).EffectCommands.front().Type, static_cast<uint8_t>(5));
+    QCOMPARE(dat.Effects.at(effectCount).EffectCommands.front().D, 1.5f);
+
+    QFile changed(created.saved);
+    QVERIFY(changed.open(QIODevice::Append));
+    QCOMPARE(changed.write("x", 1), qint64(1));
+    changed.close();
+    CreateTechSpec next = spec;
+    next.internalName = QStringLiteral("NewAge Second Bonus");
+    next.effectInternalName = QStringLiteral("NewAge Second Effect");
+    next.expectedTechCount = techCount + 1;
+    next.expectedEffectCount = effectCount + 1;
+    QCOMPARE(service.createTech(next).error.code, QStringLiteral("conflict"));
+    QCOMPARE(static_cast<int>(service.session().dat()->Techs.size()), techCount + 1);
+    QVERIFY(!service.session().isModified());
 }
 
 QTEST_GUILESS_MAIN(ApiTest)

@@ -64,12 +64,22 @@ void TechListModel::showFields(int row, FieldTreeModel &fields)
         if (!result.ok)
             return {};
         if (result.changed)
+        {
+            if (techFields().at(field).key == QStringLiteral("civ"))
+            {
+                QMetaObject::invokeMethod(this, [this] {
+                    civChanged();
+                    if (rowCount() > 0)
+                        emit dataChanged(index(0), index(rowCount() - 1));
+                }, Qt::QueuedConnection);
+            }
             entityEdited(row);
+        }
         return result.newValue;
     };
     const auto refNamer = [this](RefKind kind, int id) { return refName(*session(), kind, id, civ()); };
     fields.setObject(techFields(), TechRef{row, session()->dat()->Techs.at(row)}, &session()->names(), writer,
-                     refNamer);
+                     refNamer, fields.includeUnused());
 }
 
 QVariant TechListModel::data(const QModelIndex &index, int role) const

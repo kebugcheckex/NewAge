@@ -14,6 +14,7 @@ class QLabel;
 
 class QComboBox;
 class QLineEdit;
+class QCheckBox;
 class QListView;
 class QTreeView;
 
@@ -42,10 +43,13 @@ public:
                   const QString &filterHint, QWidget *parent = nullptr);
 
     EntityListModel *model() const { return listModel_; }
+    int civ() const;
 
     // Clears the text filter and selects entity `id`, scrolling it into view.
     // No-op when `id` is out of range or the row isn't selectable.
     void selectEntity(int id);
+    void selectCiv(int civ);
+    void refreshEntities();
 
 signals:
     // An Effect reference was double-clicked, and `id` names an effect (not -1).
@@ -80,6 +84,7 @@ private:
 
     QComboBox *civCombo_;
     QLineEdit *filterEdit_;
+    QCheckBox *showUnused_ = nullptr;
     QListView *listView_;
     QTreeView *fieldView_;
     QLabel *iconPopup_ = nullptr;

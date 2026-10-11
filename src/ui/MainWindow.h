@@ -64,6 +64,8 @@ private:
     // this game folder is opened.
     void rememberEditedMod();
     void showOptions();
+    void showModDiff();
+    void createTech();
     // Offers to save unsaved changes. Returns false if the user cancelled or
     // the save failed.
     bool confirmDiscardChanges();
@@ -77,12 +79,15 @@ private:
     QTabWidget *browsers_;
     EntityBrowser *techBrowser_ = nullptr;
     EntityBrowser *effectsBrowser_ = nullptr;
+    EntityBrowser *unitsBrowser_ = nullptr;
     QLabel *fileInfo_;
     ModsPanel *modsPanel_;
     QDockWidget *modsDock_;
     QAction *saveAction_ = nullptr;
     QAction *saveAsAction_ = nullptr;
     QAction *saveAsModAction_ = nullptr;
+    QAction *diffAction_ = nullptr;
+    QAction *createTechAction_ = nullptr;
     // The game data set last opened from a game folder (not a mod's), the
     // base for its mods. Empty after opening a loose .dat file.
     GameDataset gameDataset_;

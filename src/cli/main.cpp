@@ -255,6 +255,11 @@ int main(int argc, char *argv[])
         if (positional.size() != 2)
             return usage(QStringLiteral("Expected apply PATCH.json|-."));
     }
+    else if (command == QStringLiteral("tech"))
+    {
+        if (positional.size() != 3 || positional.at(1) != QStringLiteral("create"))
+            return usage(QStringLiteral("Expected tech create SPEC.json|-."));
+    }
     else if (command == QStringLiteral("diff"))
     {
         if (positional.size() > 2)
@@ -272,21 +277,23 @@ int main(int argc, char *argv[])
     {
         return usage(QStringLiteral("Expected info, schema [kind], lookup <table> [TEXT], list <kind>, "
                                     "get <kind> <id>..., batch FILE|-, set <kind> <id> KEY=VALUE..., "
-                                    "apply PATCH.json|-, diff [kind], mods list or mods create."));
+                                    "apply PATCH.json|-, tech create SPEC.json|-, diff [kind], mods list or mods create."));
     }
     // How messages name the command: "mods list", not "mods".
-    const QString commandName = command == QStringLiteral("mods") ? QStringLiteral("mods ") + positional.at(1) : command;
+    const QString commandName = command == QStringLiteral("mods") || command == QStringLiteral("tech")
+                                    ? command + QLatin1Char(' ') + positional.at(1) : command;
     const bool lists = command == QStringLiteral("list");
     const bool gets = command == QStringLiteral("get");
     const bool sets = command == QStringLiteral("set");
     const bool applies = command == QStringLiteral("apply");
+    const bool techCreates = command == QStringLiteral("tech");
     const bool creates = command == QStringLiteral("mods") && positional.at(1) == QStringLiteral("create");
     const bool diffs = command == QStringLiteral("diff");
     if (parser.isSet(civ) && command != QStringLiteral("lookup") && !lists && !gets && !sets && !diffs)
         return usage(QStringLiteral("--civ is not used by %1.").arg(commandName));
     if (parser.isSet(expect) && !sets)
         return usage(QStringLiteral("--expect is not used by %1.").arg(commandName));
-    if (parser.isSet(dryRun) && !sets && !applies)
+    if (parser.isSet(dryRun) && !sets && !applies && !techCreates)
         return usage(QStringLiteral("--dry-run is not used by %1.").arg(commandName));
     for (const QCommandLineOption &option : {title, author, description, from})
     {
@@ -326,7 +333,8 @@ int main(int argc, char *argv[])
 
     QJsonObject request;
     request.insert(QStringLiteral("op"),
-                   command == QStringLiteral("mods") ? QStringLiteral("mods-") + positional.at(1) : command);
+                   command == QStringLiteral("mods") || command == QStringLiteral("tech")
+                       ? command + QLatin1Char('-') + positional.at(1) : command);
     if (command == QStringLiteral("schema") && positional.size() == 2)
         request.insert(QStringLiteral("kind"), positional.at(1));
     if (command == QStringLiteral("lookup"))
@@ -394,7 +402,17 @@ int main(int argc, char *argv[])
             return usage(problem);
         request.insert(QStringLiteral("edits"), edits);
     }
-    if (sets || applies)
+    if (techCreates)
+    {
+        QString problem;
+        const QJsonDocument document = readJson(positional.at(2), QStringLiteral("Tech spec"), problem);
+        if (!problem.isEmpty())
+            return usage(problem);
+        if (!document.isObject())
+            return usage(QStringLiteral("Tech spec input must be a JSON object."));
+        request.insert(QStringLiteral("spec"), document.object());
+    }
+    if (sets || applies || techCreates)
     {
         if (parser.isSet(dryRun))
             request.insert(QStringLiteral("dryRun"), true);

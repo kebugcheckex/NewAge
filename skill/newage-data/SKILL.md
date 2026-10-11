@@ -7,7 +7,7 @@ description: Read and edit Age of Empires, AoE II and Star Wars Galactic Battleg
 
 `newage-cli` reads Genie engine `.dat` files and prints JSON. It is the command-line side of the NewAge editor and shows the same fields as the editor.
 
-**Writes go into a mod, never into the game's files.** `set` and `apply` need `--mod`; data without mods (the CD-era games, loose `--dat` files) is read-only. Never edit a `.dat` file any other way, and never copy over the game's own `.dat`.
+**Writes go into a mod, never into the game's files.** `set` and `apply` need `--mod`; data without mods (the CD-era games, loose `--dat` files) is read-only. Use this CLI for ordinary field edits. To append an entirely new tech and effect, follow [newage-civ-tech](../newage-civ-tech/SKILL.md), which uses Advanced Genie Editor on a mod copy. Never copy over the game's own `.dat`.
 
 ## Setup
 

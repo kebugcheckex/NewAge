@@ -277,6 +277,7 @@ private slots:
     void diffChecksRequestBeforeOpen();
     void diffNeedsAMod();
     void diffComparesModWithGame();
+    void techCreateWritesAndDiffs();
 };
 
 void CliTest::init()
@@ -2235,6 +2236,74 @@ void CliTest::diffComparesModWithGame()
 
     QCOMPARE(QFileInfo(gameDat).lastModified(), gameWritten);
     QCOMPARE(QFileInfo(modDat).lastModified(), modWritten);
+}
+
+void CliTest::techCreateWritesAndDiffs()
+{
+    QJsonObject request = op(QStringLiteral("tech-create"));
+    QJsonObject spec;
+    spec.insert(QStringLiteral("mode"), QStringLiteral("automatic"));
+    spec.insert(QStringLiteral("civ"), 6);
+    spec.insert(QStringLiteral("internalName"), QStringLiteral("NewAge CLI Bonus"));
+    spec.insert(QStringLiteral("prerequisites"), QJsonArray());
+    QJsonObject effect;
+    effect.insert(QStringLiteral("internalName"), QStringLiteral("NewAge CLI Effect"));
+    effect.insert(QStringLiteral("commands"), QJsonArray{QJsonObject{{QStringLiteral("type"), 5},
+                                                                     {QStringLiteral("class"), 4},
+                                                                     {QStringLiteral("attribute"), 13},
+                                                                     {QStringLiteral("amount"), 1.5}}});
+    spec.insert(QStringLiteral("effect"), effect);
+    request.insert(QStringLiteral("spec"), spec);
+    DataSource missing;
+    missing.mod = QStringLiteral("Balance");
+    QJsonObject invalid = spec;
+    invalid.insert(QStringLiteral("mystery"), 1);
+    request.insert(QStringLiteral("spec"), invalid);
+    QCOMPARE(errorCode(RequestHandler().handle(missing, request)), QStringLiteral("usage"));
+    request.insert(QStringLiteral("spec"), spec);
+    const HandlerResult batched = RequestHandler().handle(missing, batch({request}));
+    QCOMPARE(errorCode(batched.body.value(QStringLiteral("results")).toArray().at(0)), QStringLiteral("usage"));
+
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeWritableGame(game));
+    const DataSource source = balanceSource(game);
+    request.insert(QStringLiteral("dryRun"), true);
+    const HandlerResult dry = RequestHandler().handle(source, request);
+    if (dry.exitCode != 0)
+        QFAIL(qPrintable(dry.body.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString()));
+    QCOMPARE(dry.body.value(QStringLiteral("dryRun")).toBool(), true);
+    QCOMPARE(dry.body.value(QStringLiteral("tech")).toObject().value(QStringLiteral("civ")).toInt(), 6);
+    QCOMPARE(dry.body.value(QStringLiteral("effect")).toObject().value(QStringLiteral("command1.type")).toInt(), 5);
+    QCOMPARE(dry.body.value(QStringLiteral("saved")).toString(), QString());
+    const QString modDat = game.filePath(QStringLiteral("mods/Balance/resources/_common/dat/empires2_x2_p1.dat"));
+    QVERIFY(!QFile::exists(modDat));
+
+    QJsonObject expected;
+    expected.insert(QStringLiteral("techCount"), dry.body.value(QStringLiteral("techId")));
+    expected.insert(QStringLiteral("effectCount"), dry.body.value(QStringLiteral("effectId")));
+    expected.insert(QStringLiteral("sourceFingerprint"), dry.body.value(QStringLiteral("sourceFingerprint")));
+    QJsonObject stale = expected;
+    stale.insert(QStringLiteral("sourceFingerprint"), QStringLiteral("0000"));
+    spec.insert(QStringLiteral("expect"), stale);
+    request.insert(QStringLiteral("spec"), spec);
+    request.remove(QStringLiteral("dryRun"));
+    QCOMPARE(errorCode(RequestHandler().handle(source, request)), QStringLiteral("conflict"));
+    QVERIFY(!QFile::exists(modDat));
+    spec.insert(QStringLiteral("expect"), expected);
+    request.insert(QStringLiteral("spec"), spec);
+    const HandlerResult saved = RequestHandler().handle(source, request);
+    if (saved.exitCode != 0)
+        QFAIL(qPrintable(saved.body.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString()));
+    QCOMPARE(saved.body.value(QStringLiteral("techId")), dry.body.value(QStringLiteral("techId")));
+    QCOMPARE(saved.body.value(QStringLiteral("effectId")), dry.body.value(QStringLiteral("effectId")));
+    QVERIFY(QFile::exists(modDat));
+    QCOMPARE(errorCode(RequestHandler().handle(source, request)), QStringLiteral("conflict"));
+    const HandlerResult difference = RequestHandler().handle(source, diff(QStringLiteral("tech")));
+    QCOMPARE(difference.exitCode, 0);
+    QCOMPARE(difference.body.value(QStringLiteral("onlyInMod")).toInt(), 1);
 }
 
 QTEST_GUILESS_MAIN(CliTest)
