@@ -41,9 +41,37 @@ int usage(const QString &message)
     return newage::exitCodeFor(QStringLiteral("usage"));
 }
 
-// Reads the batch requests from `path`, or stdin for "-". Empty and sets
-// `problem` when the input can't be read or isn't a JSON array.
-QJsonArray readBatch(const QString &path, QString &problem)
+// KEY=VALUE text as a request value: a whole number or a decimal becomes a JSON
+// number, anything else stays text for the field parser to reject.
+QJsonValue valueFromText(const QString &text)
+{
+    bool ok = false;
+    const qlonglong whole = text.trimmed().toLongLong(&ok);
+    if (ok)
+        return static_cast<double>(whole);
+    const double decimal = text.trimmed().toDouble(&ok);
+    if (ok)
+        return decimal;
+    return text;
+}
+
+// Splits KEY=VALUE arguments into `target`. False when one has no key.
+bool insertAssignments(QJsonObject &target, const QStringList &assignments)
+{
+    for (const QString &assignment : assignments)
+    {
+        const qsizetype equals = assignment.indexOf(QLatin1Char('='));
+        if (equals <= 0)
+            return false;
+        target.insert(assignment.left(equals).trimmed(), valueFromText(assignment.mid(equals + 1)));
+    }
+    return true;
+}
+
+// Reads a JSON document from `path`, or stdin for "-". `what` names the input
+// in messages. Returns a null document and sets `problem` when it can't be
+// read or parsed.
+QJsonDocument readJson(const QString &path, const QString &what, QString &problem)
 {
     QFile file;
     bool opened = false;
@@ -58,22 +86,46 @@ QJsonArray readBatch(const QString &path, QString &problem)
     }
     if (!opened)
     {
-        problem = QStringLiteral("Cannot read batch file \"%1\": %2").arg(path, file.errorString());
+        problem = QStringLiteral("Cannot read %1 file \"%2\": %3").arg(what, path, file.errorString());
         return {};
     }
     QJsonParseError error;
     const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
     if (error.error != QJsonParseError::NoError)
     {
-        problem = QStringLiteral("Batch input is not JSON: %1 at offset %2.").arg(error.errorString()).arg(error.offset);
+        problem = QStringLiteral("%1 input is not JSON: %2 at offset %3.").arg(what, error.errorString()).arg(error.offset);
         return {};
     }
+    return document;
+}
+
+// Reads the batch requests from `path`, or stdin for "-". Empty and sets
+// `problem` when the input can't be read or isn't a JSON array.
+QJsonArray readBatch(const QString &path, QString &problem)
+{
+    const QJsonDocument document = readJson(path, QStringLiteral("Batch"), problem);
+    if (!problem.isEmpty())
+        return {};
     if (!document.isArray())
     {
         problem = QStringLiteral("Batch input must be a JSON array of requests.");
         return {};
     }
     return document.array();
+}
+
+// Reads a patch file: a JSON object with an `edits` array.
+QJsonArray readPatch(const QString &path, QString &problem)
+{
+    const QJsonDocument document = readJson(path, QStringLiteral("Patch"), problem);
+    if (!problem.isEmpty())
+        return {};
+    if (!document.isObject() || !document.object().value(QStringLiteral("edits")).isArray())
+    {
+        problem = QStringLiteral("Patch input must be a JSON object with an edits array.");
+        return {};
+    }
+    return document.object().value(QStringLiteral("edits")).toArray();
 }
 
 void printMessage(const QString &kind, const QString &message)
@@ -142,8 +194,20 @@ int main(int argc, char *argv[])
     const QCommandLineOption fields(QStringLiteral("fields"), QStringLiteral("Field keys or patterns, comma-separated."),
                                     QStringLiteral("KEYS"));
     const QCommandLineOption compact(QStringLiteral("compact"), QStringLiteral("Fields as a key-to-value object."));
-    for (const QCommandLineOption &option :
-         {game, dataset, mod, modsFolder, dat, version, locale, civ, ownerCiv, all, limit, offset, fields, compact})
+    const QCommandLineOption expect(QStringLiteral("expect"), QStringLiteral("Value the field must hold (repeatable)."),
+                                    QStringLiteral("KEY=VALUE"));
+    const QCommandLineOption dryRun(QStringLiteral("dry-run"), QStringLiteral("Check and report without saving."));
+    const QCommandLineOption title(QStringLiteral("title"), QStringLiteral("Title of the new mod."),
+                                   QStringLiteral("TITLE"));
+    const QCommandLineOption author(QStringLiteral("author"), QStringLiteral("Author of the new mod."),
+                                    QStringLiteral("AUTHOR"));
+    const QCommandLineOption description(QStringLiteral("description"), QStringLiteral("Description of the new mod."),
+                                         QStringLiteral("TEXT"));
+    const QCommandLineOption from(QStringLiteral("from"), QStringLiteral("game (default) or mod:NAME."),
+                                  QStringLiteral("SOURCE"));
+    for (const QCommandLineOption &option : {game, dataset, mod, modsFolder, dat, version, locale, civ, ownerCiv, all,
+                                             limit, offset, fields, compact, expect, dryRun, title, author, description,
+                                             from})
         parser.addOption(option);
 
     if (!parser.parse(app.arguments()))
@@ -181,24 +245,50 @@ int main(int argc, char *argv[])
         if (positional.size() != 2)
             return usage(QStringLiteral("Expected batch FILE|-."));
     }
+    else if (command == QStringLiteral("set"))
+    {
+        if (positional.size() < 4)
+            return usage(QStringLiteral("Expected set <kind> <id> KEY=VALUE..."));
+    }
+    else if (command == QStringLiteral("apply"))
+    {
+        if (positional.size() != 2)
+            return usage(QStringLiteral("Expected apply PATCH.json|-."));
+    }
     else if (command == QStringLiteral("mods"))
     {
-        if (positional.size() != 2 || positional.at(1) != QStringLiteral("list"))
-            return usage(QStringLiteral("Expected mods list."));
+        const QString subcommand = positional.value(1);
+        if (positional.size() != 2 || (subcommand != QStringLiteral("list") && subcommand != QStringLiteral("create")))
+            return usage(QStringLiteral("Expected mods list or mods create."));
         if (parser.isSet(mod))
-            return usage(QStringLiteral("--mod is not used by mods list."));
+            return usage(QStringLiteral("--mod is not used by mods %1.").arg(subcommand));
     }
     else
     {
         return usage(QStringLiteral("Expected info, schema [kind], lookup <table> [TEXT], list <kind>, "
-                                    "get <kind> <id>..., batch FILE|- or mods list."));
+                                    "get <kind> <id>..., batch FILE|-, set <kind> <id> KEY=VALUE..., "
+                                    "apply PATCH.json|-, mods list or mods create."));
     }
     // How messages name the command: "mods list", not "mods".
-    const QString commandName = command == QStringLiteral("mods") ? QStringLiteral("mods list") : command;
+    const QString commandName = command == QStringLiteral("mods") ? QStringLiteral("mods ") + positional.at(1) : command;
     const bool lists = command == QStringLiteral("list");
     const bool gets = command == QStringLiteral("get");
-    if (parser.isSet(civ) && command != QStringLiteral("lookup") && !lists && !gets)
+    const bool sets = command == QStringLiteral("set");
+    const bool applies = command == QStringLiteral("apply");
+    const bool creates = command == QStringLiteral("mods") && positional.at(1) == QStringLiteral("create");
+    if (parser.isSet(civ) && command != QStringLiteral("lookup") && !lists && !gets && !sets)
         return usage(QStringLiteral("--civ is not used by %1.").arg(commandName));
+    if (parser.isSet(expect) && !sets)
+        return usage(QStringLiteral("--expect is not used by %1.").arg(commandName));
+    if (parser.isSet(dryRun) && !sets && !applies)
+        return usage(QStringLiteral("--dry-run is not used by %1.").arg(commandName));
+    for (const QCommandLineOption &option : {title, author, description, from})
+    {
+        if (parser.isSet(option) && !creates)
+            return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), commandName));
+    }
+    if (creates && !parser.isSet(title))
+        return usage(QStringLiteral("mods create needs --title."));
     for (const QCommandLineOption &option : {ownerCiv, all, limit, offset})
     {
         if (parser.isSet(option) && !lists)
@@ -225,7 +315,8 @@ int main(int argc, char *argv[])
         source.locale = parser.value(locale);
 
     QJsonObject request;
-    request.insert(QStringLiteral("op"), command == QStringLiteral("mods") ? QStringLiteral("mods-list") : command);
+    request.insert(QStringLiteral("op"),
+                   command == QStringLiteral("mods") ? QStringLiteral("mods-") + positional.at(1) : command);
     if (command == QStringLiteral("schema") && positional.size() == 2)
         request.insert(QStringLiteral("kind"), positional.at(1));
     if (command == QStringLiteral("lookup"))
@@ -262,6 +353,49 @@ int main(int argc, char *argv[])
         }
         if (parser.isSet(compact))
             request.insert(QStringLiteral("compact"), true);
+    }
+    if (sets)
+    {
+        request.insert(QStringLiteral("kind"), positional.at(1));
+        bool ok = false;
+        const int id = positional.at(2).toInt(&ok);
+        if (!ok)
+            return usage(QStringLiteral("set ID must be an integer, not \"%1\".").arg(positional.at(2)));
+        request.insert(QStringLiteral("id"), id);
+        QJsonObject assignments;
+        if (!insertAssignments(assignments, positional.mid(3)))
+            return usage(QStringLiteral("set arguments are KEY=VALUE."));
+        request.insert(QStringLiteral("set"), assignments);
+        if (parser.isSet(expect))
+        {
+            QJsonObject expected;
+            if (!insertAssignments(expected, parser.values(expect)))
+                return usage(QStringLiteral("--expect is KEY=VALUE."));
+            request.insert(QStringLiteral("expect"), expected);
+        }
+    }
+    if (applies)
+    {
+        QString problem;
+        const QJsonArray edits = readPatch(positional.at(1), problem);
+        if (!problem.isEmpty())
+            return usage(problem);
+        request.insert(QStringLiteral("edits"), edits);
+    }
+    if (sets || applies)
+    {
+        if (parser.isSet(dryRun))
+            request.insert(QStringLiteral("dryRun"), true);
+    }
+    if (creates)
+    {
+        request.insert(QStringLiteral("title"), parser.value(title));
+        if (parser.isSet(author))
+            request.insert(QStringLiteral("author"), parser.value(author));
+        if (parser.isSet(description))
+            request.insert(QStringLiteral("description"), parser.value(description));
+        if (parser.isSet(from))
+            request.insert(QStringLiteral("from"), parser.value(from));
     }
     if (command == QStringLiteral("batch"))
     {

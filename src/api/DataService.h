@@ -187,6 +187,25 @@ struct ModsResult
 // mods_unsupported; a missing game folder or data set is no_dataset.
 ModsResult listMods(const DataSource &source);
 
+struct CreateModResult
+{
+    bool ok = false;
+    ServiceError error;
+    // The new mod folder, and where its .dat goes once it has one.
+    QString dir;
+    QString datPath;
+    // Whether `from` copied a .dat into the new mod.
+    bool copiedDat = false;
+};
+
+// Creates a mod for the data set `source` names, in `source.modsFolder` or the
+// first of modsFolders(). `from` is empty or "game" for a mod that starts from
+// the game's data (its .dat appears on the first write), or "mod:NAME" to copy
+// that mod's .dat. A loose file or a data set without mods is mods_unsupported;
+// a missing game folder or data set is no_dataset; an unusable title is
+// bad_value; a missing source mod is mod_not_found.
+CreateModResult createModForSource(const DataSource &source, const ModInfo &info, const QString &from = {});
+
 struct OpenResult
 {
     bool ok = false;

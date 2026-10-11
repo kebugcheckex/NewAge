@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 3. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type and effect command Mode, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 is done: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is measured in section 3. P2 (writes) is next.
+Status: proposal, revision 4. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type and effect command Mode, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 is done: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is measured in section 3. P2 is done: `set`, `apply` (with `--expect` and `--dry-run`), `mods create` and the mod-only save rule are in the code, with the skill's write rules; `cli_test`, `cli_process_test` and `api_test` cover conflicts, atomic patches and the game-data guard. P3 is next.
 
 ## 1. Goal
 
@@ -141,7 +141,9 @@ newage-cli diff --against-game                     # phase 3: what the mod chang
 - `set` checks every assignment before changing anything and saves once. Writing the current value is reported as unchanged and doesn't count as an edit.
 - `--expect` is compare-and-set: if a current value differs from the expected one, nothing is written and the command fails with `conflict`. The skill tells agents to pass the values they read, so a change made in between (in the GUI, or by another agent) isn't silently lost.
 - `--dry-run` validates and reports the changes without saving.
-- `mods create` prints the new folder and reminds that the mod starts disabled in the game's mod manager.
+- `set` takes `KEY=VALUE` pairs, so values are text on the command line: a whole number or a decimal is sent as a JSON number, anything else as text, which the field parser rejects with `bad_value`. `--expect` has the same form and may only name keys that `set` writes. `--civ` is for units; a global kind with `--civ` is `usage`.
+- `set` and `apply` check the request, then that a mod is named, before loading the data: no mod is `mod_required` (exit 5) and a loose `.dat` is `mods_unsupported` (exit 2), each without the load.
+- `mods create` needs `--title` and makes `<mods folder>/<title>/info.json`; it loads no data. `--from mod:NAME` also copies that mod's `.dat` for this data set when it has one. `--mods-folder` picks the folder as in `mods list`. The result has `title`, `dir`, `dat` (where the mod's `.dat` goes), `hasDat` (whether `--from` copied one) and a `note` that the mod starts disabled in the game's mod manager. A title the folder can't take (taken, reserved or illegal characters) is `bad_value`; an unknown source mod is `mod_not_found`.
 
 ### 6.1 IDs, keys and `lookup`
 
@@ -229,7 +231,9 @@ newage-cli lookup resource                 # the whole table: 0 Food Storage, 1 
 }
 ```
 
-Errors exit non-zero with a JSON body on stdout (warnings, such as missing language files, go to stderr as JSON lines):
+`saved` is the path written, and an empty string when nothing was saved: a dry run, or no value changed. A dry run also has `"dryRun": true`. Changes carry `civ` only for units. In a request: `{"op": "set", "kind": "unit", "id": 4, "civ": 1, "set": {"hit_points": 35}, "expect": {"hit_points": 30}, "dryRun": true}`, `{"op": "apply", "edits": [...], "dryRun": true}` and `{"op": "mods-create", "title": "Balance", "author": "Me", "description": "...", "from": "game"}`. Neither can be in a `batch`.
+
+Errors exit non-zero with a JSON body on stdout (warnings, such as missing language files, go to stderr as JSON lines, and so do the loader's own messages, such as `Terrains: 100`, as `{"diagnostic": ...}`; a successful write prints them too):
 
 ```json
 {"error": {"code": "out_of_range", "message": "hit_points accepts -32768..32767", "kind": "unit", "id": 4, "civ": 1, "key": "hit_points", "value": 99999}}
@@ -257,11 +261,13 @@ Errors exit non-zero with a JSON body on stdout (warnings, such as missing langu
 }
 ```
 
-A result's `changes` list converts directly back into a patch (`old` as `expect`, or swapped to undo), so a dry run can be reviewed and then applied.
+A result's `changes` list converts directly back into a patch (`old` as `expect`, or swapped to undo), so a dry run can be reviewed and then applied. `set` is a patch of one entity, and `apply` reads the file (or `-` for stdin) with the same rules.
+
+An edit's `set` is an object of key to number; `expect` has the same shape and only keys that `set` writes. A value may also be numeric text. A unit edit needs `civ` and a global kind takes none. Edits are checked in the order of the file, but the keys of one edit are applied in alphabetical order (JSON objects are unordered), which matters only when two keys of one entity depend on each other.
 
 ### 6.4 `batch`
 
-`batch` reads a JSON array of read requests (`info`, `schema`, `lookup`, `list`, `get`) from a file or stdin (`-`), loads the data once, and returns the results in the same order. A failed request returns its error in place; the others still run. Writes stay in `set` and `apply`, so a batch can never save by accident.
+`batch` reads a JSON array of read requests (`info`, `schema`, `lookup`, `list`, `get`) from a file or stdin (`-`), loads the data once, and returns the results in the same order. A failed request returns its error in place; the others still run. Writes stay in `set` and `apply`, so a batch can never save by accident: a `set`, `apply` or `mods-create` request in a batch is `usage` in its place.
 
 ```json
 [
@@ -341,7 +347,7 @@ The CLI reads and writes exactly what the descriptor tables describe, so the GUI
 
 A skill file teaches an agent when and how to use `newage-cli`. It lives in the repo at `skill/newage-data/SKILL.md`, ships next to the executable, and is installed by copying it to `~/.claude/skills/newage-data/` (or a project's `.claude/skills/`). It stays short and leaves the details to `schema` and `lookup`, so it doesn't go stale as fields are added.
 
-The file in the repo covers P1: the read commands, and that agents describe a change for the user to make in the GUI rather than writing. P2 adds the write rules from the outline below.
+The file in the repo covers P1 and P2: the read commands and the write rules from the outline below. It has not yet been run through the real-request check at the end of this section against a DE and an HD install.
 
 Draft outline:
 
@@ -373,7 +379,7 @@ The skill is validated by running a handful of real requests through an agent ag
 
 ## 10. Concurrency with the GUI
 
-The GUI keeps data in memory and doesn't watch the file. If the CLI saves a mod's `.dat` while the GUI has it open, a later save from the GUI overwrites the CLI's change, and the other way round. Phase 2 documents this in the skill (don't edit a mod that's open in NewAge), and `--expect` catches conflicts between agents. Later: a `QFileSystemWatcher` in `MainWindow` that offers to reload when the open file changes on disk.
+The GUI keeps data in memory and doesn't watch the file. If the CLI saves a mod's `.dat` while the GUI has it open, a later save from the GUI overwrites the CLI's change, and the other way round. The skill says so (don't edit a mod that's open in NewAge), and `--expect` catches conflicts between agents. Later: a `QFileSystemWatcher` in `MainWindow` that offers to reload when the open file changes on disk.
 
 ## 11. Phases
 
@@ -381,7 +387,7 @@ The GUI keeps data in memory and doesn't watch the file. If the CLI saves a mod'
 |-------|-------|-----------|
 | P0 | Refactor (4.1): field keys, numeric `Type`, `refName`, descriptor parsing, `EntityKind`, `DataService`; list models delegate | Existing tests pass unchanged; key test added |
 | P1 | Read-only CLI: `info`, `schema`, `lookup`, `list`, `get`, `batch`, `mods list`; source options | `cli_test` covers each op and error code; DE load time measured and recorded here |
-| P2 | Writes: `set`, `apply`, `--expect`, `--dry-run`, `mods create`, mod-only save rule; the skill file | Tests for conflicts, atomic patches and the game-data guard; round-trip test passes after a no-op save; skill tried on real requests |
+| P2 (done) | Writes: `set`, `apply`, `--expect`, `--dry-run`, `mods create`, mod-only save rule; the skill file | Tests for conflicts, atomic patches and the game-data guard; round-trip test passes after a no-op save; skill tried on real requests |
 | P3 | `compare-civs`, `refs`, `diff --against-game` (all read-only) | `cli_test` covers each command |
 
 Field coverage (section 8) grows alongside, in the GUI and the CLI together.

@@ -12,6 +12,7 @@
 namespace {
 
 const QString kTcDat = QStringLiteral(NEWAGE_SAMPLE_DATA_DIR "/empires2_x1_p1.dat");
+const QString kHdDat = QStringLiteral(NEWAGE_SAMPLE_DATA_DIR "/empires2_x2_p1.dat");
 
 struct Response
 {
@@ -75,6 +76,12 @@ private slots:
     void batchReadsFileAndStdin();
     void modsListRejectsBadInput();
     void modsListReadsGameFolder();
+    void writeOptionsOnlyWithWrites();
+    void setRejectsBadArguments();
+    void setWritesAndReads();
+    void applyReadsPatchFileAndStdin();
+    void modsCreateNeedsTitle();
+    void modsCreateMakesAMod();
 };
 
 void CliProcessTest::missingCommandIsJsonUsage()
@@ -344,6 +351,230 @@ void CliProcessTest::modsListReadsGameFolder()
     QCOMPARE(mods.at(0).toObject().value(QStringLiteral("title")).toString(), QStringLiteral("Balance"));
     QCOMPARE(mods.at(0).toObject().value(QStringLiteral("author")).toString(), QStringLiteral("Me"));
     QCOMPARE(mods.at(0).toObject().value(QStringLiteral("hasDat")).toBool(), false);
+}
+
+// A game folder with the HD sample .dat, an empty TC one and an empty mod
+// called Balance.
+bool makeGame(const QTemporaryDir &game)
+{
+    const QString hd = game.filePath(QStringLiteral("resources/_common/dat/empires2_x2_p1.dat"));
+    if (!QDir().mkpath(QFileInfo(hd).absolutePath()) || !QFile::copy(kHdDat, hd))
+        return false;
+    QFile tc(game.filePath(QStringLiteral("resources/_common/dat/empires2_x1_p1.dat")));
+    if (!tc.open(QIODevice::WriteOnly))
+        return false;
+    return QDir().mkpath(game.filePath(QStringLiteral("mods/Balance")));
+}
+
+QStringList withGame(const QTemporaryDir &game, const QStringList &arguments)
+{
+    return QStringList{QStringLiteral("--game"), game.path(), QStringLiteral("--mod"), QStringLiteral("Balance")}
+           + arguments;
+}
+
+int hitPointsIn(const Response &response)
+{
+    const QJsonArray fields = response.body.value(QStringLiteral("items")).toArray().at(0).toObject()
+                                  .value(QStringLiteral("fields")).toArray();
+    return fields.at(0).toObject().value(QStringLiteral("value")).toInt(-1);
+}
+
+void CliProcessTest::writeOptionsOnlyWithWrites()
+{
+    Response response = run({QStringLiteral("list"), QStringLiteral("tech"), QStringLiteral("--expect"),
+                             QStringLiteral("hit_points=1")});
+    QCOMPARE(response.exitCode, 1);
+    QCOMPARE(errorCode(response), QStringLiteral("usage"));
+
+    response = run({QStringLiteral("get"), QStringLiteral("tech"), QStringLiteral("1"), QStringLiteral("--dry-run")});
+    QCOMPARE(response.exitCode, 1);
+    QCOMPARE(errorCode(response), QStringLiteral("usage"));
+
+    response = run({QStringLiteral("apply"), QStringLiteral("-"), QStringLiteral("--expect"), QStringLiteral("a=1")});
+    QCOMPARE(response.exitCode, 1);
+    QCOMPARE(errorCode(response), QStringLiteral("usage"));
+
+    response = run({QStringLiteral("info"), QStringLiteral("--title"), QStringLiteral("x")});
+    QCOMPARE(response.exitCode, 1);
+    QCOMPARE(errorCode(response), QStringLiteral("usage"));
+
+    response = run({QStringLiteral("mods"), QStringLiteral("list"), QStringLiteral("--dry-run")});
+    QCOMPARE(response.exitCode, 1);
+    QCOMPARE(errorCode(response), QStringLiteral("usage"));
+}
+
+void CliProcessTest::setRejectsBadArguments()
+{
+    const auto usageFor = [](const QStringList &arguments) {
+        const Response response = run(arguments);
+        QCOMPARE(response.exitCode, 1);
+        QCOMPARE(errorCode(response), QStringLiteral("usage"));
+        QVERIFY(response.error.isEmpty());
+    };
+    usageFor({QStringLiteral("set")});
+    usageFor({QStringLiteral("set"), QStringLiteral("unit"), QStringLiteral("4")});
+    usageFor({QStringLiteral("set"), QStringLiteral("unit"), QStringLiteral("four"), QStringLiteral("a=1")});
+    usageFor({QStringLiteral("set"), QStringLiteral("unit"), QStringLiteral("4"), QStringLiteral("hit_points")});
+    usageFor({QStringLiteral("set"), QStringLiteral("unit"), QStringLiteral("4"), QStringLiteral("=5")});
+    usageFor({QStringLiteral("set"), QStringLiteral("unit"), QStringLiteral("4"), QStringLiteral("a=1"),
+              QStringLiteral("--expect"), QStringLiteral("a")});
+    usageFor({QStringLiteral("set"), QStringLiteral("unit"), QStringLiteral("4"), QStringLiteral("a=1"),
+              QStringLiteral("--civ"), QStringLiteral("x")});
+    usageFor({QStringLiteral("apply")});
+    usageFor({QStringLiteral("apply"), QStringLiteral("a.json"), QStringLiteral("b.json")});
+    usageFor({QStringLiteral("apply"), QStringLiteral("missing-patch.json")});
+    usageFor({QStringLiteral("mods"), QStringLiteral("create"), QStringLiteral("--mod"), QStringLiteral("Balance"),
+              QStringLiteral("--title"), QStringLiteral("x")});
+    usageFor({QStringLiteral("mods"), QStringLiteral("remove")});
+
+    // A loose file has no mods to write to.
+    const Response response = run({QStringLiteral("--dat"), kTcDat, QStringLiteral("--version"), QStringLiteral("tc"),
+                                   QStringLiteral("set"), QStringLiteral("tech"), QStringLiteral("1"),
+                                   QStringLiteral("research_time=5")});
+    QCOMPARE(response.exitCode, 2);
+    QCOMPARE(errorCode(response), QStringLiteral("mods_unsupported"));
+}
+
+void CliProcessTest::setWritesAndReads()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeGame(game));
+    const QStringList read = withGame(game, {QStringLiteral("get"), QStringLiteral("unit"), QStringLiteral("4"),
+                                             QStringLiteral("--civ"), QStringLiteral("1"), QStringLiteral("--fields"),
+                                             QStringLiteral("hit_points")});
+    const int original = hitPointsIn(run(read));
+    QVERIFY(original >= 0);
+    const QString next = QString::number(original + 1);
+
+    const QStringList set = withGame(game, {QStringLiteral("set"), QStringLiteral("unit"), QStringLiteral("4"),
+                                            QStringLiteral("--civ"), QStringLiteral("1")});
+
+    // A dry run, then a conflict, change nothing.
+    Response response = run(set + QStringList{QStringLiteral("hit_points=") + next, QStringLiteral("--dry-run")});
+    QCOMPARE(response.exitCode, 0);
+    QCOMPARE(response.body.value(QStringLiteral("dryRun")).toBool(), true);
+    QCOMPARE(response.body.value(QStringLiteral("changes")).toArray().size(), 1);
+    response = run(set + QStringList{QStringLiteral("hit_points=") + next, QStringLiteral("--expect"),
+                                     QStringLiteral("hit_points=") + QString::number(original + 9)});
+    QCOMPARE(response.exitCode, 4);
+    QCOMPARE(errorCode(response), QStringLiteral("conflict"));
+    QCOMPARE(hitPointsIn(run(read)), original);
+
+    response = run(set + QStringList{QStringLiteral("hit_points=99999")});
+    QCOMPARE(response.exitCode, 3);
+    QCOMPARE(errorCode(response), QStringLiteral("out_of_range"));
+    response = run(set + QStringList{QStringLiteral("hit_points=lots")});
+    QCOMPARE(response.exitCode, 3);
+    QCOMPARE(errorCode(response), QStringLiteral("bad_value"));
+
+    response = run(set + QStringList{QStringLiteral("hit_points=") + next, QStringLiteral("--expect"),
+                                     QStringLiteral("hit_points=") + QString::number(original)});
+    QCOMPARE(response.exitCode, 0);
+    const QJsonObject change = response.body.value(QStringLiteral("changes")).toArray().at(0).toObject();
+    QCOMPARE(change.value(QStringLiteral("old")).toInt(), original);
+    QCOMPARE(change.value(QStringLiteral("new")).toInt(), original + 1);
+    QVERIFY(response.body.value(QStringLiteral("saved")).toString().endsWith(
+        QStringLiteral("mods/Balance/resources/_common/dat/empires2_x2_p1.dat")));
+    QCOMPARE(hitPointsIn(run(read)), original + 1);
+
+    // The game's own file is untouched: read without the mod.
+    const Response plain = run({QStringLiteral("--game"), game.path(), QStringLiteral("get"), QStringLiteral("unit"),
+                                QStringLiteral("4"), QStringLiteral("--civ"), QStringLiteral("1"),
+                                QStringLiteral("--fields"), QStringLiteral("hit_points")});
+    QCOMPARE(hitPointsIn(plain), original);
+}
+
+void CliProcessTest::applyReadsPatchFileAndStdin()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeGame(game));
+    const Response before = run(withGame(game, {QStringLiteral("get"), QStringLiteral("unit"), QStringLiteral("4"),
+                                                QStringLiteral("--civ"), QStringLiteral("1"), QStringLiteral("--fields"),
+                                                QStringLiteral("hit_points")}));
+    const int original = hitPointsIn(before);
+    QVERIFY(original >= 0);
+
+    const auto patch = [](int civ, int hitPoints) {
+        return QStringLiteral(R"({"edits": [{"kind": "unit", "id": 4, "civ": %1, "set": {"hit_points": %2}}]})")
+            .arg(civ)
+            .arg(hitPoints)
+            .toUtf8();
+    };
+
+    // From stdin, as a dry run.
+    Response response = run(withGame(game, {QStringLiteral("apply"), QStringLiteral("-"), QStringLiteral("--dry-run")}),
+                            patch(1, original + 2));
+    QCOMPARE(response.exitCode, 0);
+    QCOMPARE(response.body.value(QStringLiteral("dryRun")).toBool(), true);
+    QCOMPARE(response.body.value(QStringLiteral("saved")).toString(), QString());
+
+    // From a file, for real.
+    QTemporaryDir files;
+    QVERIFY(files.isValid());
+    QFile file(files.filePath(QStringLiteral("patch.json")));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(patch(1, original + 2));
+    file.close();
+    response = run(withGame(game, {QStringLiteral("apply"), file.fileName()}));
+    QCOMPARE(response.exitCode, 0);
+    QCOMPARE(response.body.value(QStringLiteral("changes")).toArray().size(), 1);
+    QVERIFY(!response.body.value(QStringLiteral("saved")).toString().isEmpty());
+
+    // Not a patch: an array, bad JSON, no edits.
+    for (const QByteArray &input : {QByteArray("[]"), QByteArray("{nope"), QByteArray(R"({"edits": 3})")})
+    {
+        response = run(withGame(game, {QStringLiteral("apply"), QStringLiteral("-")}), input);
+        QCOMPARE(response.exitCode, 1);
+        QCOMPARE(errorCode(response), QStringLiteral("usage"));
+    }
+}
+
+void CliProcessTest::modsCreateNeedsTitle()
+{
+    Response response = run({QStringLiteral("mods"), QStringLiteral("create")});
+    QCOMPARE(response.exitCode, 1);
+    QCOMPARE(errorCode(response), QStringLiteral("usage"));
+
+    response = run({QStringLiteral("mods"), QStringLiteral("create"), QStringLiteral("--title"), QStringLiteral("x")});
+    QCOMPARE(response.exitCode, 2);
+    QCOMPARE(errorCode(response), QStringLiteral("no_dataset"));
+}
+
+void CliProcessTest::modsCreateMakesAMod()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    for (const QString &name : {QStringLiteral("x1"), QStringLiteral("x2")})
+    {
+        QFile file(game.filePath(QStringLiteral("resources/_common/dat/empires2_%1_p1.dat").arg(name)));
+        QVERIFY(QDir().mkpath(QFileInfo(file).absolutePath()));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+    }
+
+    const Response response = run({QStringLiteral("--game"), game.path(), QStringLiteral("mods"),
+                                   QStringLiteral("create"), QStringLiteral("--title"), QStringLiteral("Castles"),
+                                   QStringLiteral("--author"), QStringLiteral("Me"), QStringLiteral("--description"),
+                                   QStringLiteral("Cheaper castles"), QStringLiteral("--from"), QStringLiteral("game")});
+    QCOMPARE(response.exitCode, 0);
+    QVERIFY(response.error.isEmpty());
+    QVERIFY(QFileInfo(game.filePath(QStringLiteral("mods/Castles/info.json"))).isFile());
+    QVERIFY(response.body.value(QStringLiteral("note")).toString().contains(QStringLiteral("disabled")));
+
+    const Response again = run({QStringLiteral("--game"), game.path(), QStringLiteral("mods"), QStringLiteral("create"),
+                                QStringLiteral("--title"), QStringLiteral("castles")});
+    QCOMPARE(again.exitCode, 3);
+    QCOMPARE(errorCode(again), QStringLiteral("bad_value"));
+
+    const Response listed = run({QStringLiteral("--game"), game.path(), QStringLiteral("mods"), QStringLiteral("list")});
+    const QJsonObject mod = listed.body.value(QStringLiteral("mods")).toArray().at(0).toObject();
+    QCOMPARE(mod.value(QStringLiteral("title")).toString(), QStringLiteral("Castles"));
+    QCOMPARE(mod.value(QStringLiteral("author")).toString(), QStringLiteral("Me"));
 }
 
 QTEST_GUILESS_MAIN(CliProcessTest)

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
 
@@ -279,6 +280,95 @@ ModsResult listMods(const DataSource &source)
     result.otherModsFolders = folders;
     for (const Mod &mod : findMods(result.modsFolder))
         result.mods.append({mod, QFileInfo::exists(modDatPath(result.dataset, mod.dir))});
+    result.ok = true;
+    return result;
+}
+
+CreateModResult createModForSource(const DataSource &source, const ModInfo &info, const QString &from)
+{
+    CreateModResult result;
+    if (!source.datPath.isEmpty())
+    {
+        result.error = makeError(QStringLiteral("mods_unsupported"), QStringLiteral("A loose data file has no mods."));
+        return result;
+    }
+    DataSource in = source;
+    if (in.locale.isEmpty())
+        in.locale = QStringLiteral("en");
+    GameDataset dataset;
+    if (const std::optional<ServiceError> error = chooseDataset(in, dataset))
+    {
+        result.error = *error;
+        return result;
+    }
+    if (!supportsMods(dataset))
+    {
+        result.error = makeError(QStringLiteral("mods_unsupported"), QStringLiteral("This data set has no mods."));
+        return result;
+    }
+
+    QString folder = in.modsFolder;
+    if (folder.isEmpty())
+    {
+        const QStringList folders = modsFolders(dataset);
+        if (!folders.isEmpty())
+            folder = folders.first();
+    }
+    if (folder.isEmpty())
+    {
+        result.error = makeError(QStringLiteral("usage"), QStringLiteral("No mods folder found; pass --mods-folder."));
+        return result;
+    }
+
+    // Resolve the source mod first, so a bad `from` creates nothing.
+    QString sourceDat;
+    if (!from.isEmpty() && from != QLatin1String("game"))
+    {
+        if (!from.startsWith(QLatin1String("mod:")))
+        {
+            result.error = makeError(QStringLiteral("usage"), QStringLiteral("--from is \"game\" or \"mod:NAME\"."));
+            return result;
+        }
+        const QString name = from.mid(4);
+        const QString dir = resolveModDir(dataset, name, folder);
+        if (dir.isEmpty())
+        {
+            result.error = makeError(QStringLiteral("mod_not_found"), QStringLiteral("No mod named \"%1\".").arg(name));
+            return result;
+        }
+        const QString path = modDatPath(dataset, dir);
+        if (QFileInfo::exists(path))
+            sourceDat = path;
+    }
+
+    if (const QString problem = checkModTitle(folder, info.title); !problem.isEmpty())
+    {
+        result.error = makeError(QStringLiteral("bad_value"), problem);
+        result.error.key = QStringLiteral("title");
+        result.error.value = info.title;
+        return result;
+    }
+    QString reason;
+    const QString dir = createMod(folder, info, &reason);
+    if (dir.isEmpty())
+    {
+        result.error = makeError(QStringLiteral("save_failed"), reason);
+        return result;
+    }
+    result.datPath = modDatPath(dataset, dir);
+    if (!sourceDat.isEmpty())
+    {
+        if (isGameDataFile(dataset, result.datPath)
+            || !QDir().mkpath(QFileInfo(result.datPath).absolutePath()) || !QFile::copy(sourceDat, result.datPath))
+        {
+            QDir(dir).removeRecursively();
+            result.error = makeError(QStringLiteral("save_failed"),
+                                     QStringLiteral("Couldn't copy the data from \"%1\".").arg(from.mid(4)));
+            return result;
+        }
+        result.copiedDat = true;
+    }
+    result.dir = dir;
     result.ok = true;
     return result;
 }

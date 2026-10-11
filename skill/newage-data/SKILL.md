@@ -1,13 +1,13 @@
 ---
 name: newage-data
-description: Read Age of Empires, AoE II and Star Wars Galactic Battlegrounds game data (units, techs, effects, civs in Genie .dat files) with newage-cli. Use when asked about unit stats, costs, train or research times, techs, unique techs, civ bonuses or effects, or what a mod changes, for AoE, AoE II (AoK, TC, HD, DE) or SWGB.
+description: Read and edit Age of Empires, AoE II and Star Wars Galactic Battlegrounds game data (units, techs, effects, civs in Genie .dat files) with newage-cli. Use when asked about unit stats, costs, train or research times, techs, unique techs, civ bonuses or effects, what a mod changes, or to make balance changes in a mod, for AoE, AoE II (AoK, TC, HD, DE) or SWGB.
 ---
 
 # newage-data
 
 `newage-cli` reads Genie engine `.dat` files and prints JSON. It is the command-line side of the NewAge editor and shows the same fields as the editor.
 
-**This version is read-only.** It has `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list`. There is no `set`, `apply` or `mods create` yet, so you cannot change data with it. If the user asks for a change, read the current values, say exactly which entity, civ, field key and new value the change needs, and tell them to make it in the NewAge editor inside a mod. Never edit a `.dat` file any other way.
+**Writes go into a mod, never into the game's files.** `set` and `apply` need `--mod`; data without mods (the CD-era games, loose `--dat` files) is read-only. Never edit a `.dat` file any other way, and never copy over the game's own `.dat`.
 
 ## Setup
 
@@ -30,6 +30,7 @@ description: Read Age of Empires, AoE II and Star Wars Galactic Battlegrounds ga
 ## Output and errors
 
 - stdout carries exactly one JSON object per call. stderr carries JSON lines `{"warning": {...}}` and `{"diagnostic": {...}}` (for example missing language files or loader messages). Read stdout; glance at stderr only when something looks wrong.
+- A successful write also prints loader lines such as `{"diagnostic": {"message": "Terrains: 100"}}` on stderr. They aren't problems.
 - Failure: non-zero exit and `{"error": {"code", "message", "kind"?, "id"?, "civ"?, "key"?, "value"?}}` on stdout.
 
   | Exit | Codes | What to do |
@@ -37,6 +38,9 @@ description: Read Age of Empires, AoE II and Star Wars Galactic Battlegrounds ga
   | 1 | `usage` | Fix the command line; the message says what is wrong (for example `get unit needs a civ.`). |
   | 2 | `load_failed`, `no_dataset`, `mod_not_found`, `mods_unsupported` | Wrong game folder, data set, mod or version key. Check with the user. |
   | 3 | `unknown_kind`, `unknown_entity`, `inactive_entity`, `unknown_field` | Bad table, ID or field key. Re-check with `lookup` or `schema`. |
+  | 3 | `not_applicable`, `read_only`, `bad_value`, `out_of_range` | A write the field doesn't take: the field isn't on this entity, isn't editable, or the value isn't a number in `min`..`max`. Nothing was written. |
+  | 4 | `conflict` | The value changed since you read it (`--expect`). Nothing was written. Read again and tell the user what changed before retrying. |
+  | 5 | `mod_required`, `game_data_protected`, `save_failed` | No `--mod`, or the save path is a game file, or the save failed. Nothing was written. |
 
 ## Identifiers
 
@@ -60,7 +64,8 @@ description: Read Age of Empires, AoE II and Star Wars Galactic Battlegrounds ga
 - **Costs:** `costN.resource` is a resource ID (`lookup resource`: 0 food, 1 wood, 2 stone, 3 gold, 4 population headroom), `costN.amount` the amount, and `costN.paid` whether it is deducted (population headroom is checked, not paid, so it has `paid` 0).
 - **Attack and armour amounts are packed.** An Attribute Modifier command with attribute 8 (armour) or 9 (attack) stores `class * 256 + value` in `amount`: `1030` is class 4 (melee) +6, `770` is class 3 (pierce) +2. Decode it before reporting.
 - **Times** (`train_time`, `research_time`) are in game seconds.
-- Coverage is partial: units have identity, a few stats, costs, the first train location and some graphics; attacks, armours, range and reload time are not available yet. If a field the user wants isn't in `schema`, say so instead of guessing.
+- Coverage is partial: units have identity, a few stats, costs, the first train location and some graphics; attacks, armours, range and reload time are not available yet. If a field the user wants isn't in `schema`, say so instead of guessing. Only fields with `editable: true` can be written; effects are read-only for now.
+- **Lists inside an entity can't grow or shrink.** You can change an existing cost, train location or effect command, but not add or remove entries.
 
 ## Commands
 
@@ -72,6 +77,9 @@ newage-cli list <kind> [--civ N] [--owner-civ N] [--all] [--limit N] [--offset N
 newage-cli get <kind> <id>... [--civ N] [--fields KEY,PATTERN*,...] [--compact]
 newage-cli batch FILE|-
 newage-cli mods list
+newage-cli mods create --title T [--author A] [--description D] [--from game|mod:NAME]
+newage-cli set <kind> <id> KEY=VALUE... --mod M [--civ N] [--expect KEY=VALUE]... [--dry-run]
+newage-cli apply PATCH.json|- --mod M [--dry-run]
 ```
 
 - **`schema [kind]`** lists each field's `key`, `name`, `group`, `type`, `editable`, `min`/`max` and `labelKind`. `conditional` fields exist only on some entities. Effects use `commandN.*` templates. Run it once per task for the kinds you need.
@@ -80,6 +88,49 @@ newage-cli mods list
 - **`get <kind> <id>...`** returns `{kind, civ?, items: [{id, name, internalName, active?, fields}]}`, items in the order asked. Each field has `key`, `value` (the stored number, the only thing that counts), and annotations: `label` for references, `text` for language-string IDs. `--fields` takes keys and `*` patterns (`cost*`, `command1.*`). `--compact` turns `fields` into a `{key: value}` object with keys sorted alphabetically, which is best for bulk reads. It drops `label` and `text`, so when you will report reference fields (such as `train_location` or `costN.resource`) or help text, read those fields without `--compact`. One bad ID fails the whole call.
 - **`batch FILE|-`** runs a JSON array of read requests (`info`, `schema`, `lookup`, `list`, `get`) with one load, from a file or stdin. Requests use the option names in JSON: `{"op": "get", "kind": "unit", "ids": [4, 24], "civ": 1, "fields": ["hit_points", "cost*"], "compact": true}`, `{"op": "list", "kind": "tech", "ownerCiv": 14}`, `{"op": "lookup", "table": "unit", "text": "archer", "civ": 1}`. Source options go on the command line and apply to all requests; `--civ` and other command options are rejected there. The output is `{"results": [...], "failed": N}` with one entry per request, each either that request's normal result or `{"error": ...}`. Exit 0 means the batch ran; check `failed`.
 - **`mods list`** lists the mods of the data set without loading it (fast): `{modsFolder, otherModsFolders?, mods: [{title, dir, author, description, hasDat}]}`. `hasDat` false means the mod uses the game's data for this data set. Use `title` with `--mod`.
+
+## Writing
+
+Rules for every write:
+
+1. **Resolve with `lookup`, read with `get`, then write.** Use the IDs and field keys you resolved, never names. The field must have `editable: true` in `schema`.
+2. **Pass what you read as `--expect`** (or `expect` in a patch), so a change made in the meantime, in the NewAge editor or by another agent, is reported as `conflict` instead of being overwritten.
+3. **Dry run first, show the changes, then write.** `--dry-run` runs every check and reports `changes` without saving. Show the user each change as entity, civ, field, old value and new value, and write only after they agree (or already told you to go ahead with exactly that change).
+4. **Units are per civ.** `set` and each unit edit name one civ (`--civ N`, `"civ": N`). A change "for everyone" or "for the Spanish" is not one edit: write one edit per civ and list them all in the dry run, or tell the user it only reaches the civs you named. A global change to a unit's base stats means every civ's copy; civ bonuses and unique techs are effects, which are global, and are read-only for now.
+5. **One save per step.** `set` takes several `KEY=VALUE` pairs for one entity. For more than one entity, write a patch file and `apply` it: all edits are checked against the data, then applied, then saved once, or none are. `apply` reads the file, or stdin with `-`.
+6. **Writing the value that is already there** is reported under `unchanged` and doesn't save. A result with `saved: ""` and an empty `changes` means nothing was written.
+7. **After writing, `get` the entities again** (with `--mod`) and report the stored values, not what you meant to write.
+8. **Don't write a mod that is open in NewAge.** The editor doesn't watch the file, so its next save would overwrite the change (and the other way round). Ask the user to close the mod or keep the editor away from it.
+9. **A mod starts disabled.** After `mods create` or the first write, tell the user to enable the mod in the game's mod manager.
+
+Writes need a mod:
+
+- `mods list` shows the mods of the data set. Use a title with `--mod`. If the user names none, ask which mod to use. Never pick one yourself, and never write without one.
+- `mods create --title "Balance"` makes a new mod folder (ask the user for the title). It loads no data. `--from mod:NAME` starts from a copy of another mod's `.dat`; the default `game` starts from the game's data, and the mod's own `.dat` appears on its first write. A mod made for one data set has no `.dat` for another: `hasDat` says which.
+- A mod's `.dat` can be older than the game's after a game update. Compare `fileVersion` in `info` with and without `--mod` before writing, and tell the user when the mod is behind.
+
+Value rules: ints must be whole numbers in the field's `min`..`max`; floats are read as decimals (`0.2`). `KEY=VALUE` on the command line is text that the CLI turns into a number, and a negative value is fine (`research_time=-1`). Use the numbers from `get`; labels (`label`, `text`) are never accepted as input.
+
+`set` examples:
+
+```sh
+newage-cli --mod Balance set unit 4 --civ 1 hit_points=35 cost1.amount=20 --expect hit_points=30 --expect cost1.amount=25 --dry-run
+newage-cli --mod Balance set tech 440 research_time=45 --expect research_time=60
+```
+
+`apply` takes a patch (the same edits as `set`, many entities); `changes` from a result converts straight back into one (`old` becomes `expect`, or swap `old` and `new` to undo):
+
+```json
+{
+  "edits": [
+    {"kind": "tech", "id": 440, "set": {"cost1.amount": 800}, "expect": {"cost1.amount": 1000}},
+    {"kind": "unit", "id": 82, "civ": 1, "set": {"cost1.amount": 585}, "expect": {"cost1.amount": 600}},
+    {"kind": "unit", "id": 82, "civ": 2, "set": {"cost1.amount": 585}, "expect": {"cost1.amount": 600}}
+  ]
+}
+```
+
+The result is `{"saved": "<path or empty>", "dryRun"?: true, "changes": [{kind, id, civ?, key, old, new}], "unchanged": [...]}`. `set`, `apply` and `mods create` can't be used in a `batch`.
 
 ## Workflows
 
@@ -122,3 +173,9 @@ From the techs: unique techs have player-facing names, and the enable techs (`..
 **Finding effects that touch a unit**: there is no reverse-reference command yet. Read effects in pages with `batch` and `--compact` and filter for `commandN.unit`, `commandN.to_unit` or `commandN.class` matching the unit or its class.
 
 **Inside a mod**: `mods list` to get the title, then add `--mod "<title>"` to every call. To see what the mod changed, read the same entities with and without `--mod` and compare.
+
+**"Make the Spanish unique tech cheaper"**: `lookup civ spanish`, `list tech --owner-civ <id>` or `lookup tech <name>`, then `get tech <id> --fields 'cost*,research_time'`. Ask which mod to use (`mods list`), run `set tech <id> cost1.amount=<new> --expect cost1.amount=<old> --mod <title> --dry-run`, show the change, then run it without `--dry-run` and `get` it again. Check `ownerCiv` is the civ the user means.
+
+**"Make the Castle 10% cheaper in my balance mod"**: the Castle is a unit, so find its civ copies. `lookup unit castle --civ <id>`, read `cost*` with `--compact` for the civ(s) in question, and compute each new amount from the value you read (round, and say how). Write one `apply` edit per civ, each with its `expect`, dry run, show them all, then apply. If the civ copies differ, say so before changing them.
+
+**"Apply these 40 balance changes and save once"**: resolve the names with one `batch`, read the current values with another, write a patch with an `expect` for every edit, `apply --dry-run`, show a summary the user can check (the full list of changes if they ask), `apply`, then verify with a `batch` of `get` requests. A single failed check, such as a stale `expect` or an out-of-range value, writes nothing and names the edit (`kind`, `id`, `civ`, `key`); fix that edit and run the whole patch again.

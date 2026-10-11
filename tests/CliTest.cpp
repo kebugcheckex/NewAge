@@ -17,6 +17,7 @@ using namespace newage;
 namespace {
 
 const QString kTcDat = QStringLiteral(NEWAGE_SAMPLE_DATA_DIR "/empires2_x1_p1.dat");
+const QString kHdDat = QStringLiteral(NEWAGE_SAMPLE_DATA_DIR "/empires2_x2_p1.dat");
 
 bool writeFile(const QString &root, const QString &relative)
 {
@@ -131,6 +132,64 @@ bool makeModdedGame(const QTemporaryDir &game)
            && !createMod(folder, {QStringLiteral("Empty"), {}, {}}).isEmpty();
 }
 
+// A game folder holding the HD sample .dat (and an empty TC one), with a mods
+// folder that has an empty mod called Balance.
+bool makeWritableGame(const QTemporaryDir &game)
+{
+    const QString gameDat = game.filePath(QStringLiteral("resources/_common/dat/empires2_x2_p1.dat"));
+    if (!QDir().mkpath(QFileInfo(gameDat).absolutePath()) || !QFile::copy(kHdDat, gameDat)
+        || !writeFile(game.path(), QStringLiteral("resources/_common/dat/empires2_x1_p1.dat")))
+        return false;
+    return !createMod(game.filePath(QStringLiteral("mods")), {QStringLiteral("Balance"), {}, {}}).isEmpty();
+}
+
+DataSource balanceSource(const QTemporaryDir &game)
+{
+    DataSource source;
+    source.gameDir = game.path();
+    source.mod = QStringLiteral("Balance");
+    return source;
+}
+
+QJsonObject setRequest(int id, int civ, const QJsonObject &values)
+{
+    QJsonObject request = op(QStringLiteral("set"));
+    request.insert(QStringLiteral("kind"), QStringLiteral("unit"));
+    request.insert(QStringLiteral("id"), id);
+    request.insert(QStringLiteral("civ"), civ);
+    request.insert(QStringLiteral("set"), values);
+    return request;
+}
+
+QJsonObject hitPointsOf(int hitPoints)
+{
+    QJsonObject values;
+    values.insert(QStringLiteral("hit_points"), hitPoints);
+    return values;
+}
+
+// The stored hit points of unit 4 in civ 1, read through `get`.
+int readHitPoints(const DataSource &source)
+{
+    QJsonObject request = get(QStringLiteral("unit"), {4});
+    request.insert(QStringLiteral("civ"), 1);
+    request.insert(QStringLiteral("fields"), QJsonArray{QStringLiteral("hit_points")});
+    const HandlerResult result = RequestHandler().handle(source, request);
+    if (result.exitCode != 0)
+        return -1;
+    return fieldByKey(result.body.value(QStringLiteral("items")).toArray().at(0).toObject(),
+                      QStringLiteral("hit_points"))
+        .value(QStringLiteral("value"))
+        .toInt(-1);
+}
+
+QJsonObject modsCreate(const QString &title)
+{
+    QJsonObject request = op(QStringLiteral("mods-create"));
+    request.insert(QStringLiteral("title"), title);
+    return request;
+}
+
 } // namespace
 
 class CliTest : public QObject
@@ -184,6 +243,18 @@ private slots:
     void modsListFolderOverride();
     void modsListFails_data();
     void modsListFails();
+    void writesCheckRequestBeforeOpen_data();
+    void writesCheckRequestBeforeOpen();
+    void writeNeedsAModBeforeLoading();
+    void setWritesTheMod();
+    void setDryRunAndUnchangedDoNotSave();
+    void setExpectConflict();
+    void setRejectsBadValues();
+    void applyIsAtomicAndRoundTrips();
+    void batchRejectsWrites();
+    void modsCreateMakesAMod();
+    void modsCreateFromMod();
+    void modsCreateFails();
 };
 
 void CliTest::init()
@@ -1381,6 +1452,413 @@ void CliTest::modsListFails()
     const HandlerResult result = RequestHandler().handle(source, op(QStringLiteral("mods-list")));
     QCOMPARE(result.exitCode, 2);
     QCOMPARE(errorCode(result), code);
+}
+
+void CliTest::writesCheckRequestBeforeOpen_data()
+{
+    QTest::addColumn<QJsonObject>("request");
+    QTest::addColumn<int>("exitCode");
+    QTest::addColumn<QString>("code");
+
+    const QJsonObject oneValue = hitPointsOf(30);
+    const auto without = [&](const QString &key) {
+        QJsonObject request = setRequest(4, 1, oneValue);
+        request.remove(key);
+        return request;
+    };
+    const auto with = [&](const QString &key, const QJsonValue &value) {
+        QJsonObject request = setRequest(4, 1, oneValue);
+        request.insert(key, value);
+        return request;
+    };
+    QTest::newRow("set without kind") << without(QStringLiteral("kind")) << 1 << QStringLiteral("usage");
+    QTest::newRow("set unknown kind") << with(QStringLiteral("kind"), QStringLiteral("building")) << 3
+                                      << QStringLiteral("unknown_kind");
+    QTest::newRow("set without id") << without(QStringLiteral("id")) << 1 << QStringLiteral("usage");
+    QTest::newRow("set fractional id") << with(QStringLiteral("id"), 4.5) << 1 << QStringLiteral("usage");
+    QTest::newRow("unit without civ") << without(QStringLiteral("civ")) << 1 << QStringLiteral("usage");
+    QTest::newRow("civ is text") << with(QStringLiteral("civ"), QStringLiteral("1")) << 1 << QStringLiteral("usage");
+    QTest::newRow("tech with civ") << with(QStringLiteral("kind"), QStringLiteral("tech")) << 1 << QStringLiteral("usage");
+    QTest::newRow("set without values") << without(QStringLiteral("set")) << 1 << QStringLiteral("usage");
+    QTest::newRow("set empty") << with(QStringLiteral("set"), QJsonObject()) << 1 << QStringLiteral("usage");
+    QTest::newRow("value is boolean")
+        << with(QStringLiteral("set"), QJsonObject{{QStringLiteral("hit_points"), true}}) << 1
+        << QStringLiteral("usage");
+    QTest::newRow("value is null")
+        << with(QStringLiteral("set"), QJsonObject{{QStringLiteral("hit_points"), QJsonValue::Null}}) << 1
+        << QStringLiteral("usage");
+    QTest::newRow("expect is an array") << with(QStringLiteral("expect"), QJsonArray()) << 1 << QStringLiteral("usage");
+    QTest::newRow("expect key not set")
+        << with(QStringLiteral("expect"), QJsonObject{{QStringLiteral("speed"), 1}}) << 1 << QStringLiteral("usage");
+    QTest::newRow("expect value is text")
+        << with(QStringLiteral("expect"), QJsonObject{{QStringLiteral("hit_points"), true}}) << 1
+        << QStringLiteral("usage");
+    QTest::newRow("dryRun is text") << with(QStringLiteral("dryRun"), QStringLiteral("yes")) << 1
+                                    << QStringLiteral("usage");
+
+    QJsonObject apply = op(QStringLiteral("apply"));
+    QTest::newRow("apply without edits") << apply << 1 << QStringLiteral("usage");
+    apply.insert(QStringLiteral("edits"), QJsonArray());
+    QTest::newRow("apply empty edits") << apply << 1 << QStringLiteral("usage");
+    apply.insert(QStringLiteral("edits"), QJsonArray{5});
+    QTest::newRow("apply edit not an object") << apply << 1 << QStringLiteral("usage");
+    QJsonObject bad = setRequest(4, 1, oneValue);
+    bad.remove(QStringLiteral("op"));
+    bad.insert(QStringLiteral("civ"), 1.5);
+    apply.insert(QStringLiteral("edits"), QJsonArray{bad});
+    QTest::newRow("apply bad edit") << apply << 1 << QStringLiteral("usage");
+    bad.insert(QStringLiteral("civ"), 1);
+    bad.insert(QStringLiteral("kind"), QStringLiteral("building"));
+    apply.insert(QStringLiteral("edits"), QJsonArray{bad});
+    QTest::newRow("apply unknown kind") << apply << 3 << QStringLiteral("unknown_kind");
+
+    QJsonObject create = modsCreate(QStringLiteral("x"));
+    QTest::newRow("create without title") << QJsonObject{{QStringLiteral("op"), QStringLiteral("mods-create")}} << 1
+                                          << QStringLiteral("usage");
+    create.insert(QStringLiteral("author"), 5);
+    QTest::newRow("create author is a number") << create << 1 << QStringLiteral("usage");
+}
+
+// The source has no data, so a request that reached the open would be
+// no_dataset, never these.
+void CliTest::writesCheckRequestBeforeOpen()
+{
+    QFETCH(QJsonObject, request);
+    QFETCH(int, exitCode);
+    QFETCH(QString, code);
+
+    DataSource source;
+    source.mod = QStringLiteral("Balance");
+    const HandlerResult result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, exitCode);
+    QCOMPARE(errorCode(result), code);
+}
+
+// The game's .dat files are empty, so a load would be load_failed.
+void CliTest::writeNeedsAModBeforeLoading()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeModdedGame(game));
+
+    DataSource source;
+    source.gameDir = game.path();
+    HandlerResult result = RequestHandler().handle(source, setRequest(4, 1, hitPointsOf(30)));
+    QCOMPARE(result.exitCode, 5);
+    QCOMPARE(errorCode(result), QStringLiteral("mod_required"));
+
+    QJsonObject patch = op(QStringLiteral("apply"));
+    QJsonObject edit = setRequest(4, 1, hitPointsOf(30));
+    edit.remove(QStringLiteral("op"));
+    patch.insert(QStringLiteral("edits"), QJsonArray{edit});
+    result = RequestHandler().handle(source, patch);
+    QCOMPARE(result.exitCode, 5);
+    QCOMPARE(errorCode(result), QStringLiteral("mod_required"));
+
+    // NEWAGE_MOD counts as the mod, so this one gets as far as the load.
+    source.mod = QStringLiteral("Balance");
+    QCOMPARE(errorCode(RequestHandler().handle(source, setRequest(4, 1, hitPointsOf(30)))),
+             QStringLiteral("load_failed"));
+
+    DataSource loose = tcSource();
+    result = RequestHandler().handle(loose, setRequest(4, 1, hitPointsOf(30)));
+    QCOMPARE(result.exitCode, 2);
+    QCOMPARE(errorCode(result), QStringLiteral("mods_unsupported"));
+}
+
+void CliTest::setWritesTheMod()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeWritableGame(game));
+    const DataSource source = balanceSource(game);
+    const int original = readHitPoints(source);
+    QVERIFY(original >= 0);
+    const QString savePath = game.filePath(QStringLiteral("mods/Balance/resources/_common/dat/empires2_x2_p1.dat"));
+    QVERIFY(!QFile::exists(savePath));
+
+    QJsonObject request = setRequest(4, 1, hitPointsOf(original + 1));
+    request.insert(QStringLiteral("expect"), hitPointsOf(original));
+    const HandlerResult result = RequestHandler().handle(source, request);
+    if (result.exitCode != 0)
+        QFAIL(qPrintable(result.body.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString()));
+    QCOMPARE(result.body.value(QStringLiteral("saved")).toString(), forwardPath(savePath));
+    QVERIFY(!result.body.contains(QStringLiteral("dryRun")));
+    QCOMPARE(result.body.value(QStringLiteral("unchanged")).toArray().size(), 0);
+    const QJsonArray changes = result.body.value(QStringLiteral("changes")).toArray();
+    QCOMPARE(changes.size(), 1);
+    const QJsonObject change = changes.at(0).toObject();
+    QCOMPARE(change.value(QStringLiteral("kind")).toString(), QStringLiteral("unit"));
+    QCOMPARE(change.value(QStringLiteral("id")).toInt(), 4);
+    QCOMPARE(change.value(QStringLiteral("civ")).toInt(), 1);
+    QCOMPARE(change.value(QStringLiteral("key")).toString(), QStringLiteral("hit_points"));
+    QCOMPARE(change.value(QStringLiteral("old")).toInt(), original);
+    QCOMPARE(change.value(QStringLiteral("new")).toInt(), original + 1);
+
+    QVERIFY(QFile::exists(savePath));
+    QCOMPARE(readHitPoints(source), original + 1);
+    DataSource gameOnly = source;
+    gameOnly.mod.clear();
+    QCOMPARE(readHitPoints(gameOnly), original);
+
+    // A result's changes read back as a patch: old as expect undoes it.
+    QJsonObject edit;
+    for (const QString &key : {QStringLiteral("kind"), QStringLiteral("id"), QStringLiteral("civ")})
+        edit.insert(key, change.value(key));
+    edit.insert(QStringLiteral("set"), QJsonObject{{change.value(QStringLiteral("key")).toString(), change.value(QStringLiteral("old"))}});
+    edit.insert(QStringLiteral("expect"), QJsonObject{{change.value(QStringLiteral("key")).toString(), change.value(QStringLiteral("new"))}});
+    QJsonObject undo = op(QStringLiteral("apply"));
+    undo.insert(QStringLiteral("edits"), QJsonArray{edit});
+    QCOMPARE(RequestHandler().handle(source, undo).exitCode, 0);
+    QCOMPARE(readHitPoints(source), original);
+}
+
+void CliTest::setDryRunAndUnchangedDoNotSave()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeWritableGame(game));
+    const DataSource source = balanceSource(game);
+    const int original = readHitPoints(source);
+    const QString savePath = game.filePath(QStringLiteral("mods/Balance/resources/_common/dat/empires2_x2_p1.dat"));
+
+    QJsonObject request = setRequest(4, 1, hitPointsOf(original + 1));
+    request.insert(QStringLiteral("dryRun"), true);
+    HandlerResult result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("dryRun")).toBool(), true);
+    QCOMPARE(result.body.value(QStringLiteral("saved")).toString(), QString());
+    QCOMPARE(result.body.value(QStringLiteral("changes")).toArray().size(), 1);
+    QVERIFY(!QFile::exists(savePath));
+
+    // Text values are read like JSON numbers, as the command line sends them.
+    request = setRequest(4, 1, QJsonObject{{QStringLiteral("hit_points"), QString::number(original)}});
+    result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("saved")).toString(), QString());
+    QCOMPARE(result.body.value(QStringLiteral("changes")).toArray().size(), 0);
+    QCOMPARE(result.body.value(QStringLiteral("unchanged")).toArray().size(), 1);
+    QVERIFY(!QFile::exists(savePath));
+}
+
+void CliTest::setExpectConflict()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeWritableGame(game));
+    const DataSource source = balanceSource(game);
+    const int original = readHitPoints(source);
+
+    QJsonObject request = setRequest(4, 1, hitPointsOf(original + 1));
+    request.insert(QStringLiteral("expect"), hitPointsOf(original + 5));
+    const HandlerResult result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, 4);
+    QCOMPARE(errorCode(result), QStringLiteral("conflict"));
+    const QJsonObject error = result.body.value(QStringLiteral("error")).toObject();
+    QCOMPARE(error.value(QStringLiteral("key")).toString(), QStringLiteral("hit_points"));
+    QCOMPARE(error.value(QStringLiteral("civ")).toInt(), 1);
+    QVERIFY(!QFile::exists(game.filePath(QStringLiteral("mods/Balance/resources/_common/dat/empires2_x2_p1.dat"))));
+}
+
+void CliTest::setRejectsBadValues()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeWritableGame(game));
+    const DataSource source = balanceSource(game);
+
+    struct Case
+    {
+        QJsonObject request;
+        QString code;
+    };
+    const QList<Case> cases = {
+        {setRequest(4, 1, hitPointsOf(99999)), QStringLiteral("out_of_range")},
+        {setRequest(4, 1, QJsonObject{{QStringLiteral("hit_points"), 1.5}}), QStringLiteral("bad_value")},
+        {setRequest(4, 1, QJsonObject{{QStringLiteral("hit_points"), QStringLiteral("many")}}), QStringLiteral("bad_value")},
+        {setRequest(4, 1, QJsonObject{{QStringLiteral("nope"), 1}}), QStringLiteral("unknown_field")},
+        {setRequest(4, 1000, hitPointsOf(30)), QStringLiteral("unknown_entity")},
+        {setRequest(100000, 1, hitPointsOf(30)), QStringLiteral("unknown_entity")},
+    };
+    for (const Case &entry : cases)
+    {
+        const HandlerResult result = RequestHandler().handle(source, entry.request);
+        QCOMPARE(result.exitCode, 3);
+        QCOMPARE(errorCode(result), entry.code);
+    }
+    QVERIFY(!QFile::exists(game.filePath(QStringLiteral("mods/Balance/resources/_common/dat/empires2_x2_p1.dat"))));
+}
+
+void CliTest::applyIsAtomicAndRoundTrips()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeWritableGame(game));
+    const DataSource source = balanceSource(game);
+    const QString savePath = game.filePath(QStringLiteral("mods/Balance/resources/_common/dat/empires2_x2_p1.dat"));
+    const int original = readHitPoints(source);
+
+    const auto edit = [](int civ, int hitPoints) {
+        QJsonObject object = setRequest(4, civ, hitPointsOf(hitPoints));
+        object.remove(QStringLiteral("op"));
+        return object;
+    };
+    QJsonObject patch = op(QStringLiteral("apply"));
+    patch.insert(QStringLiteral("edits"), QJsonArray{edit(1, original + 1), edit(2, 99999)});
+    HandlerResult result = RequestHandler().handle(source, patch);
+    QCOMPARE(result.exitCode, 3);
+    QCOMPARE(errorCode(result), QStringLiteral("out_of_range"));
+    QCOMPARE(result.body.value(QStringLiteral("error")).toObject().value(QStringLiteral("civ")).toInt(), 2);
+    QVERIFY(!QFile::exists(savePath));
+    QCOMPARE(readHitPoints(source), original);
+
+    // A conflict in the last edit also stops the first.
+    QJsonObject conflicting = edit(2, 40);
+    conflicting.insert(QStringLiteral("expect"), hitPointsOf(-7));
+    patch.insert(QStringLiteral("edits"), QJsonArray{edit(1, original + 1), conflicting});
+    result = RequestHandler().handle(source, patch);
+    QCOMPARE(result.exitCode, 4);
+    QVERIFY(!QFile::exists(savePath));
+
+    // One civ per edit: both are written by a single save.
+    patch.insert(QStringLiteral("edits"), QJsonArray{edit(1, original + 1), edit(2, original + 2)});
+    result = RequestHandler().handle(source, patch);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("changes")).toArray().size(), 2);
+    QCOMPARE(result.body.value(QStringLiteral("saved")).toString(), forwardPath(savePath));
+    QCOMPARE(readHitPoints(source), original + 1);
+
+    // A no-op apply leaves the file as it is.
+    const QDateTime saved = QFileInfo(savePath).lastModified();
+    patch.insert(QStringLiteral("edits"), QJsonArray{edit(1, original + 1)});
+    result = RequestHandler().handle(source, patch);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("saved")).toString(), QString());
+    QCOMPARE(QFileInfo(savePath).lastModified(), saved);
+}
+
+void CliTest::batchRejectsWrites()
+{
+    DataSource source;
+    source.datPath = QStringLiteral("missing.dat");
+    source.versionKey = QStringLiteral("tc");
+    QJsonObject apply = op(QStringLiteral("apply"));
+    const HandlerResult result = RequestHandler().handle(
+        source, batch({setRequest(4, 1, hitPointsOf(30)), apply, modsCreate(QStringLiteral("x"))}));
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("failed")).toInt(), 3);
+    for (const QJsonValue &entry : result.body.value(QStringLiteral("results")).toArray())
+    {
+        QCOMPARE(errorCode(entry), QStringLiteral("usage"));
+        QVERIFY(entry.toObject().value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString().contains(
+            QStringLiteral("cannot be in a batch")));
+    }
+}
+
+// The game's .dat files are empty, so this passes only if nothing is loaded.
+void CliTest::modsCreateMakesAMod()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeModdedGame(game));
+    DataSource source;
+    source.gameDir = game.path();
+    source.mod = QStringLiteral("Balance");
+
+    QJsonObject request = modsCreate(QStringLiteral("Castles"));
+    request.insert(QStringLiteral("author"), QStringLiteral("Me"));
+    request.insert(QStringLiteral("description"), QStringLiteral("Cheaper castles"));
+    const HandlerResult result = RequestHandler().handle(source, request);
+    if (result.exitCode != 0)
+        QFAIL(qPrintable(result.body.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString()));
+    QCOMPARE(result.body.value(QStringLiteral("title")).toString(), QStringLiteral("Castles"));
+    QCOMPARE(result.body.value(QStringLiteral("dir")).toString(), forwardPath(game.filePath(QStringLiteral("mods/Castles"))));
+    QCOMPARE(result.body.value(QStringLiteral("dat")).toString(),
+             forwardPath(game.filePath(QStringLiteral("mods/Castles/resources/_common/dat/empires2_x2_p1.dat"))));
+    QCOMPARE(result.body.value(QStringLiteral("hasDat")).toBool(), false);
+    QVERIFY(result.body.value(QStringLiteral("note")).toString().contains(QStringLiteral("disabled")));
+    QVERIFY(!QFile::exists(game.filePath(QStringLiteral("mods/Castles/resources"))));
+
+    const HandlerResult listed = RequestHandler().handle(source, op(QStringLiteral("mods-list")));
+    QCOMPARE(listed.exitCode, 0);
+    const QJsonArray mods = listed.body.value(QStringLiteral("mods")).toArray();
+    QCOMPARE(mods.size(), 3);
+    QCOMPARE(mods.at(1).toObject().value(QStringLiteral("title")).toString(), QStringLiteral("Castles"));
+    QCOMPARE(mods.at(1).toObject().value(QStringLiteral("author")).toString(), QStringLiteral("Me"));
+    QCOMPARE(mods.at(1).toObject().value(QStringLiteral("description")).toString(), QStringLiteral("Cheaper castles"));
+}
+
+void CliTest::modsCreateFromMod()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeModdedGame(game));
+    DataSource source;
+    source.gameDir = game.path();
+
+    QJsonObject request = modsCreate(QStringLiteral("Copy"));
+    request.insert(QStringLiteral("from"), QStringLiteral("mod:balance"));
+    HandlerResult result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("hasDat")).toBool(), true);
+    QVERIFY(QFile::exists(game.filePath(QStringLiteral("mods/Copy/resources/_common/dat/empires2_x2_p1.dat"))));
+
+    // A source mod without a .dat gives a mod without one.
+    request = modsCreate(QStringLiteral("FromEmpty"));
+    request.insert(QStringLiteral("from"), QStringLiteral("mod:Empty"));
+    result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("hasDat")).toBool(), false);
+
+    request = modsCreate(QStringLiteral("FromGame"));
+    request.insert(QStringLiteral("from"), QStringLiteral("game"));
+    QCOMPARE(RequestHandler().handle(source, request).exitCode, 0);
+}
+
+void CliTest::modsCreateFails()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeModdedGame(game));
+    DataSource source;
+    source.gameDir = game.path();
+
+    const auto failsWith = [&](const DataSource &where, const QJsonObject &request, int exitCode, const QString &code) {
+        const HandlerResult result = RequestHandler().handle(where, request);
+        QCOMPARE(result.exitCode, exitCode);
+        QCOMPARE(errorCode(result), code);
+    };
+
+    failsWith(source, modsCreate(QStringLiteral("balance")), 3, QStringLiteral("bad_value"));
+    failsWith(source, modsCreate(QStringLiteral("a/b")), 3, QStringLiteral("bad_value"));
+    failsWith(source, modsCreate(QStringLiteral(" padded ")), 3, QStringLiteral("bad_value"));
+
+    QJsonObject missing = modsCreate(QStringLiteral("Fresh"));
+    missing.insert(QStringLiteral("from"), QStringLiteral("mod:Nope"));
+    failsWith(source, missing, 2, QStringLiteral("mod_not_found"));
+    missing.insert(QStringLiteral("from"), QStringLiteral("Balance"));
+    failsWith(source, missing, 1, QStringLiteral("usage"));
+    QVERIFY(!QFile::exists(game.filePath(QStringLiteral("mods/Fresh"))));
+
+    failsWith(DataSource{}, modsCreate(QStringLiteral("Fresh")), 2, QStringLiteral("no_dataset"));
+    failsWith(tcSource(), modsCreate(QStringLiteral("Fresh")), 2, QStringLiteral("mods_unsupported"));
+
+    QTemporaryDir cd;
+    QVERIFY(cd.isValid());
+    QVERIFY(writeFile(cd.path(), QStringLiteral("data/empires2_x1_p1.dat")));
+    DataSource cdSource;
+    cdSource.gameDir = cd.path();
+    failsWith(cdSource, modsCreate(QStringLiteral("Fresh")), 2, QStringLiteral("mods_unsupported"));
 }
 
 QTEST_GUILESS_MAIN(CliTest)

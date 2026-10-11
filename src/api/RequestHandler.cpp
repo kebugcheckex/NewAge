@@ -544,6 +544,13 @@ HandlerResult handleBatch(const DataSource &source, const QJsonObject &request)
             results[i] = usage(QStringLiteral("mods-list reads no data and cannot be in a batch."));
             continue;
         }
+        const QJsonValue batchedOp = value.toObject().value(QStringLiteral("op"));
+        if (batchedOp == QStringLiteral("set") || batchedOp == QStringLiteral("apply")
+            || batchedOp == QStringLiteral("mods-create"))
+        {
+            results[i] = usage(QStringLiteral("%1 writes and cannot be in a batch.").arg(batchedOp.toString()));
+            continue;
+        }
         Prepared ready;
         if (const std::optional<HandlerResult> bad = prepare(value.toObject(), ready))
             results[i] = *bad;
@@ -617,6 +624,201 @@ HandlerResult handleModsList(const DataSource &source)
     return succeeded(body, warnings);
 }
 
+QJsonObject changeObject(const FieldChange &change)
+{
+    QJsonObject item;
+    item.insert(QStringLiteral("kind"), change.kind);
+    item.insert(QStringLiteral("id"), change.id);
+    if (change.civ >= 0)
+        item.insert(QStringLiteral("civ"), change.civ);
+    item.insert(QStringLiteral("key"), change.key);
+    item.insert(QStringLiteral("old"), storedValue(change.oldValue));
+    item.insert(QStringLiteral("new"), storedValue(change.newValue));
+    return item;
+}
+
+QJsonObject applyObject(const ApplyResult &applied, bool dryRun)
+{
+    QJsonArray changes;
+    for (const FieldChange &change : applied.changes)
+        changes.append(changeObject(change));
+    QJsonArray unchanged;
+    for (const FieldChange &change : applied.unchanged)
+        unchanged.append(changeObject(change));
+    QJsonObject body;
+    body.insert(QStringLiteral("saved"), jsonPath(applied.saved));
+    if (dryRun)
+        body.insert(QStringLiteral("dryRun"), true);
+    body.insert(QStringLiteral("changes"), changes);
+    body.insert(QStringLiteral("unchanged"), unchanged);
+    return body;
+}
+
+// A written value: a JSON number, or text that the field parser reads (the
+// CLI passes KEY=VALUE text through). Anything else is a usage error.
+bool readValue(const QJsonValue &value, QVariant &out)
+{
+    if (!value.isDouble() && !value.isString())
+        return false;
+    out = value.toVariant();
+    return true;
+}
+
+// A failed readEdit: a usage message, or an unknown kind.
+struct EditProblem
+{
+    QString usage;
+    QString unknownKind;
+};
+
+// Edits of one entity: `set` (key to value) with optional `expect` (key to the
+// value read earlier). Appends one FieldEdit per key in `set`.
+std::optional<EditProblem> readEdit(const QJsonObject &object, const QString &where, QList<FieldEdit> &out)
+{
+    const auto problem = [](const QString &message) { return EditProblem{message, {}}; };
+
+    FieldEdit base;
+    const QJsonValue kindValue = object.value(QStringLiteral("kind"));
+    if (!kindValue.isString() || kindValue.toString().isEmpty())
+        return problem(QStringLiteral("%1 needs a kind.").arg(where));
+    base.kind = kindValue.toString();
+    const EntityKind *kind = findEntityKind(base.kind);
+    if (!kind)
+        return EditProblem{{}, base.kind};
+    if (!readInt(object.value(QStringLiteral("id")), base.id))
+        return problem(QStringLiteral("%1 needs an integer id.").arg(where));
+
+    const QJsonValue civValue = object.value(QStringLiteral("civ"));
+    if (civValue.isUndefined())
+    {
+        if (kind->perCiv())
+            return problem(QStringLiteral("%1 %2 needs a civ.").arg(where, base.kind));
+    }
+    else
+    {
+        if (!kind->perCiv())
+            return problem(QStringLiteral("%1 %2 takes no civ.").arg(where, base.kind));
+        if (!readInt(civValue, base.civ))
+            return problem(QStringLiteral("civ must be an integer."));
+    }
+
+    const QJsonValue setValue = object.value(QStringLiteral("set"));
+    if (!setValue.isObject() || setValue.toObject().isEmpty())
+        return problem(QStringLiteral("%1 needs a non-empty set object.").arg(where));
+    const QJsonObject set = setValue.toObject();
+    const QJsonValue expectValue = object.value(QStringLiteral("expect"));
+    if (!expectValue.isUndefined() && !expectValue.isObject())
+        return problem(QStringLiteral("expect must be an object."));
+    const QJsonObject expect = expectValue.toObject();
+    for (auto it = expect.begin(); it != expect.end(); ++it)
+    {
+        if (!set.contains(it.key()))
+            return problem(QStringLiteral("expect names \"%1\", which set does not write.").arg(it.key()));
+    }
+
+    for (auto it = set.begin(); it != set.end(); ++it)
+    {
+        FieldEdit edit = base;
+        edit.key = it.key();
+        if (!readValue(it.value(), edit.value))
+            return problem(QStringLiteral("The value of %1 must be a number.").arg(it.key()));
+        if (expect.contains(it.key()))
+        {
+            QVariant expected;
+            if (!readValue(expect.value(it.key()), expected))
+                return problem(QStringLiteral("The expected value of %1 must be a number.").arg(it.key()));
+            edit.expect = expected;
+        }
+        out.append(edit);
+    }
+    return std::nullopt;
+}
+
+HandlerResult editProblem(const EditProblem &problem)
+{
+    if (!problem.unknownKind.isEmpty())
+        return failed(unknownKind(problem.unknownKind,
+                                  QStringLiteral("Unknown kind \"%1\".").arg(problem.unknownKind)));
+    return usage(problem.usage);
+}
+
+// `set` and `apply`. A missing mod is caught before the slow data load.
+HandlerResult handleWrite(const DataSource &source, const QJsonObject &request)
+{
+    const QString op = request.value(QStringLiteral("op")).toString();
+    QList<FieldEdit> edits;
+    if (op == QStringLiteral("set"))
+    {
+        if (const std::optional<EditProblem> problem = readEdit(request, QStringLiteral("set"), edits))
+            return editProblem(*problem);
+    }
+    else
+    {
+        const QJsonValue editsValue = request.value(QStringLiteral("edits"));
+        if (!editsValue.isArray() || editsValue.toArray().isEmpty())
+            return usage(QStringLiteral("apply needs a non-empty edits array."));
+        qsizetype index = 0;
+        for (const QJsonValue &value : editsValue.toArray())
+        {
+            const QString where = QStringLiteral("edit %1").arg(index++);
+            if (!value.isObject())
+                return usage(QStringLiteral("%1 is not an object.").arg(where));
+            if (const std::optional<EditProblem> problem = readEdit(value.toObject(), where, edits))
+                return editProblem(*problem);
+        }
+    }
+    const QJsonValue dryValue = request.value(QStringLiteral("dryRun"));
+    if (!dryValue.isUndefined() && !dryValue.isBool())
+        return usage(QStringLiteral("dryRun must be true or false."));
+    const bool dryRun = dryValue.toBool();
+
+    const DataSource resolved = resolveSource(source);
+    if (!resolved.datPath.isEmpty())
+        return failed(makeError(QStringLiteral("mods_unsupported"), QStringLiteral("A loose data file is read-only.")));
+    if (resolved.mod.isEmpty())
+        return failed(makeError(QStringLiteral("mod_required"), QStringLiteral("Writing needs a mod (--mod).")));
+
+    DataService service;
+    const OpenResult opened = service.open(resolved);
+    if (!opened.ok)
+        return failed(opened.error, opened.warnings);
+    const ApplyResult applied = service.apply(edits, dryRun);
+    if (!applied.ok)
+        return failed(applied.error, opened.warnings);
+    return succeeded(applyObject(applied, dryRun), opened.warnings);
+}
+
+// Makes a mod. Reads no data, so it is quick even on DE.
+HandlerResult handleModsCreate(const DataSource &source, const QJsonObject &request)
+{
+    const QJsonValue titleValue = request.value(QStringLiteral("title"));
+    if (!titleValue.isString() || titleValue.toString().isEmpty())
+        return usage(QStringLiteral("mods create needs a title."));
+    ModInfo info;
+    info.title = titleValue.toString();
+    for (const QString &key : {QStringLiteral("author"), QStringLiteral("description"), QStringLiteral("from")})
+    {
+        const QJsonValue value = request.value(key);
+        if (!value.isUndefined() && !value.isString())
+            return usage(QStringLiteral("%1 must be a string.").arg(key));
+    }
+    info.author = request.value(QStringLiteral("author")).toString();
+    info.description = request.value(QStringLiteral("description")).toString();
+
+    const CreateModResult created =
+        createModForSource(resolveSource(source), info, request.value(QStringLiteral("from")).toString());
+    if (!created.ok)
+        return failed(created.error);
+
+    QJsonObject body;
+    body.insert(QStringLiteral("title"), info.title);
+    body.insert(QStringLiteral("dir"), jsonPath(created.dir));
+    body.insert(QStringLiteral("dat"), jsonPath(created.datPath));
+    body.insert(QStringLiteral("hasDat"), created.copiedDat);
+    body.insert(QStringLiteral("note"), QStringLiteral("The mod starts disabled; enable it in the game's mod manager."));
+    return succeeded(body);
+}
+
 } // namespace
 
 int exitCodeFor(const QString &code)
@@ -647,6 +849,11 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
         return handleBatch(source, request);
     if (request.value(QStringLiteral("op")) == QStringLiteral("mods-list"))
         return handleModsList(resolveSource(source));
+    if (request.value(QStringLiteral("op")) == QStringLiteral("set")
+        || request.value(QStringLiteral("op")) == QStringLiteral("apply"))
+        return handleWrite(source, request);
+    if (request.value(QStringLiteral("op")) == QStringLiteral("mods-create"))
+        return handleModsCreate(source, request);
 
     Prepared prepared;
     if (const std::optional<HandlerResult> bad = prepare(request, prepared))

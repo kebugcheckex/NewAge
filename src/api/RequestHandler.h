@@ -35,11 +35,17 @@ struct HandlerResult
 // itself is malformed or the data can't be opened. `{"op": "mods-list"}`
 // lists the data set's mods without loading the data, ignores the source's
 // mod, and can't be in a batch.
+// Writes: `{"op": "set", "kind": "unit", "id": 4, "civ": 1, "set": {"hit_points": 35},
+// "expect": {"hit_points": 30}, "dryRun": true}` and `{"op": "apply", "edits": [...]}`
+// (each edit is a set request without `op`) return `{"saved", "changes",
+// "unchanged"}` (docs/cli.md, section 6.2), and need the source's mod.
+// `{"op": "mods-create", "title": "T", "author"?, "description"?, "from"?}` makes
+// a mod without loading data. None of the three can be in a batch.
 // Source options stay on `source`, not in the request, because a batch
 // shares one open. Empty game, dataset, mod and mods-folder fields are filled
 // from the environment before opening.
 //
-// Phase 1 reads start here. Unsupported ops are `usage` and do not open data.
+// Unsupported ops are `usage` and do not open data.
 class RequestHandler
 {
 public:
