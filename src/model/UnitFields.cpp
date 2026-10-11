@@ -164,4 +164,37 @@ const QList<FieldDesc<Unit>> &unitFields()
     return fields;
 }
 
+void maskUnitFields(Unit &unit)
+{
+    unit.ID = 0;
+    unit.Class = 0;
+    unit.Name.clear();
+    unit.LanguageDLLName = 0;
+    unit.LanguageDLLNameU16 = 0;
+    unit.LanguageDLLCreation = 0;
+    unit.LanguageDLLCreationU16 = 0;
+    unit.HitPoints = 0;
+    unit.LineOfSight = 0;
+    unit.Speed = 0;
+    unit.GarrisonCapacity = 0;
+    unit.ResourceCapacity = 0;
+    for (auto &cost : unit.Creatable.ResourceCosts)
+    {
+        cost.Type = 0;
+        cost.Amount = 0;
+        cost.Flag = 0;
+    }
+    if (!unit.Creatable.TrainLocations.empty())
+    {
+        unit.Creatable.TrainLocations.front().LocationID = 0;
+        unit.Creatable.TrainLocations.front().QueueTime = 0;
+    }
+    unit.CollisionSize = {0, 0, 0};
+    unit.StandingGraphic = {0, 0};
+    unit.DyingGraphic = 0;
+    unit.IconID = 0;
+    unit.Enabled = 0;
+    unit.HideInEditor = 0;
+}
+
 } // namespace newage

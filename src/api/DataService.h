@@ -36,7 +36,8 @@ struct DataSource
 DataSource resolveSource(DataSource source);
 
 // One assignment. `civ` is required for a per-civ kind and ignored otherwise.
-// `expect`, when set, is compare-and-set against the loaded value.
+// `expect`, when set, is compare-and-set against the value the edits before
+// this one left.
 struct FieldEdit
 {
     QString kind;
@@ -223,6 +224,92 @@ struct ApplyResult
     QList<FieldChange> unchanged;
 };
 
+// What `diff` compares. An empty `kind` compares every kind. `civ` limits
+// units to that civ; -1 compares every civ both files have. `fields` are key
+// patterns, as in GetQuery, and need a kind; they limit the fields compared.
+// `limit` -1 means no limit.
+struct DiffQuery
+{
+    QString kind;
+    int civ = -1;
+    QStringList fields;
+    int offset = 0;
+    int limit = -1;
+};
+
+// One field whose stored value differs. A side the field doesn't apply to,
+// such as an effect command the other file lacks, has an invalid value.
+// Labels and texts are filled for the items diff() returns, as `get` fills
+// them.
+struct DiffField
+{
+    QString key;
+    RefKind labelKind = RefKind::None;
+    bool stringId = false;
+    QVariant modValue;
+    QVariant gameValue;
+    QString modLabel;
+    QString gameLabel;
+    QString modText;
+    QString gameText;
+};
+
+enum class DiffStatus
+{
+    Changed,
+    // The game has the entity and the mod doesn't: a civ or unit the mod
+    // predates, or a unit slot the mod emptied.
+    OnlyInGame,
+    OnlyInMod,
+};
+
+// One entity that differs. `civs` are the unit copies with this same
+// difference, ascending, and empty for global kinds. `name` and
+// `internalName` come from the mod, or from the game when the mod lacks the
+// entity or its internal name is empty (a placeholder). `unlisted` is set when the entity also differs outside the fields
+// the kind lists (attacks, armors, ...); it is not checked when the query
+// names fields.
+struct DiffItem
+{
+    DiffStatus status = DiffStatus::Changed;
+    QString kind;
+    int id = -1;
+    QList<int> civs;
+    QString name;
+    QString internalName;
+    QList<DiffField> fields;
+    bool unlisted = false;
+};
+
+// Entity counts of one kind; units count civ 0's slots, as `info` does.
+struct DiffCount
+{
+    QString kind;
+    int mod = 0;
+    int game = 0;
+};
+
+// `hasDat` false means the mod has no .dat of its own, so it uses the game's
+// data unchanged and nothing is compared. `changed`, `onlyInGame` and
+// `onlyInMod` count every item, before offset and limit; `total` is their sum.
+struct DiffResult
+{
+    bool ok = false;
+    ServiceError error;
+    QStringList warnings;
+    bool hasDat = false;
+    QString modDat;
+    QString gameDat;
+    QString modFileVersion;
+    QString gameFileVersion;
+    QList<DiffCount> counts;
+    int changed = 0;
+    int onlyInGame = 0;
+    int onlyInMod = 0;
+    int total = 0;
+    QList<DiffItem> items;
+};
+
 // Owns one Session and is the only way a caller outside the GUI opens data
 // and writes it. Writes go to the open mod's .dat, never to a game file.
 class DataService
@@ -270,10 +357,18 @@ public:
     // error. Unit labels in global kinds name the civ's copy, else civ 0's.
     GetResult get(const GetQuery &query) const;
 
-    // Checks every edit against the loaded data, then stores the ones that
-    // change a value, then saves once. A failed check writes nothing. A dry
-    // run reports the same change list and does not save.
+    // Checks and stores each edit in order, so an edit sees the ones before
+    // it, then saves once. Any failure undoes them all and writes nothing. A
+    // dry run reports the same change list, then undoes it.
     ApplyResult apply(const QList<FieldEdit> &edits, bool dryRun = false);
+
+    // Compares the open mod's .dat with the game's current data set, which it
+    // loads alongside. Entities are matched by ID. Civs are compared by
+    // presence only, and units over the civs both files have. Each side keeps
+    // its own file version; entities are compared as the older of the two
+    // writes them. Without an open mod it is mod_required; after a loose-file
+    // open, mods_unsupported. Reads only; writes nothing.
+    DiffResult diff(const DiffQuery &query) const;
 
 private:
     ServiceError writeGuard() const;

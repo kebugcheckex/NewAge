@@ -38,7 +38,7 @@ description: Read and edit Age of Empires, AoE II and Star Wars Galactic Battleg
   | 1 | `usage` | Fix the command line; the message says what is wrong (for example `get unit needs a civ.`). |
   | 2 | `load_failed`, `no_dataset`, `mod_not_found`, `mods_unsupported` | Wrong game folder, data set, mod or version key. Check with the user. |
   | 3 | `unknown_kind`, `unknown_entity`, `inactive_entity`, `unknown_field` | Bad table, ID or field key. Re-check with `lookup` or `schema`. |
-  | 3 | `not_applicable`, `read_only`, `bad_value`, `out_of_range` | A write the field doesn't take: the field isn't on this entity, isn't editable, or the value isn't a number in `min`..`max`. Nothing was written. |
+  | 3 | `not_applicable`, `read_only`, `bad_value`, `out_of_range` | A write the field doesn't take: the field isn't on this entity, isn't editable, the value is the wrong type, or it is out of `min`..`max` (for text, longer than `max`). Nothing was written. |
   | 4 | `conflict` | The value changed since you read it (`--expect`). Nothing was written. Read again and tell the user what changed before retrying. |
   | 5 | `mod_required`, `game_data_protected`, `save_failed` | No `--mod`, or the save path is a game file, or the save failed. Nothing was written. |
 
@@ -64,8 +64,9 @@ description: Read and edit Age of Empires, AoE II and Star Wars Galactic Battleg
 - **Costs:** `costN.resource` is a resource ID (`lookup resource`: 0 food, 1 wood, 2 stone, 3 gold, 4 population headroom), `costN.amount` the amount, and `costN.paid` whether it is deducted (population headroom is checked, not paid, so it has `paid` 0).
 - **Attack and armour amounts are packed.** An Attribute Modifier command with attribute 8 (armour) or 9 (attack) stores `class * 256 + value` in `amount`: `1030` is class 4 (melee) +6, `770` is class 3 (pierce) +2. Decode it before reporting.
 - **Times** (`train_time`, `research_time`) are in game seconds.
-- Coverage is partial: units have identity, a few stats, costs, the first train location and some graphics; attacks, armours, range and reload time are not available yet. If a field the user wants isn't in `schema`, say so instead of guessing. Only fields with `editable: true` can be written; effects are read-only for now.
-- **Lists inside an entity can't grow or shrink.** You can change an existing cost, train location or effect command, but not add or remove entries.
+- Coverage is partial: units have identity, a few stats, costs, the first train location and some graphics; attacks, armours, range and reload time are not available yet. Techs and effects are fully covered. If a field the user wants isn't in `schema`, say so instead of guessing. Only fields with `editable: true` can be written.
+- **Unit lists can't grow or shrink.** You can change an existing attack, armour or train location, but not add or remove one. **Effect commands can:** `command_count` adds empty commands at the end (type 255) or drops the last ones. A tech's six required techs and three costs are fixed slots, and an unused one (`-1`) can be filled in.
+- **Text fields** (`type` `string`: `internal_name` of techs and effects) take Latin-1 text up to `max` characters. Player-facing names and help are `language_*` string IDs, not text; the CLI can point them at another string but can't write language files.
 
 ## Commands
 
@@ -80,6 +81,7 @@ newage-cli mods list
 newage-cli mods create --title T [--author A] [--description D] [--from game|mod:NAME]
 newage-cli set <kind> <id> KEY=VALUE... --mod M [--civ N] [--expect KEY=VALUE]... [--dry-run]
 newage-cli apply PATCH.json|- --mod M [--dry-run]
+newage-cli diff [kind] --mod M [--civ N] [--fields KEY,PATTERN*,...] [--limit N] [--offset N]
 ```
 
 - **`schema [kind]`** lists each field's `key`, `name`, `group`, `type`, `editable`, `min`/`max` and `labelKind`. `conditional` fields exist only on some entities. Effects use `commandN.*` templates. Run it once per task for the kinds you need.
@@ -88,6 +90,7 @@ newage-cli apply PATCH.json|- --mod M [--dry-run]
 - **`get <kind> <id>...`** returns `{kind, civ?, items: [{id, name, internalName, active?, fields}]}`, items in the order asked. Each field has `key`, `value` (the stored number, the only thing that counts), and annotations: `label` for references, `text` for language-string IDs. `--fields` takes keys and `*` patterns (`cost*`, `command1.*`). `--compact` turns `fields` into a `{key: value}` object with keys sorted alphabetically, which is best for bulk reads. It drops `label` and `text`, so when you will report reference fields (such as `train_location` or `costN.resource`) or help text, read those fields without `--compact`. One bad ID fails the whole call.
 - **`batch FILE|-`** runs a JSON array of read requests (`info`, `schema`, `lookup`, `list`, `get`) with one load, from a file or stdin. Requests use the option names in JSON: `{"op": "get", "kind": "unit", "ids": [4, 24], "civ": 1, "fields": ["hit_points", "cost*"], "compact": true}`, `{"op": "list", "kind": "tech", "ownerCiv": 14}`, `{"op": "lookup", "table": "unit", "text": "archer", "civ": 1}`. Source options go on the command line and apply to all requests; `--civ` and other command options are rejected there. The output is `{"results": [...], "failed": N}` with one entry per request, each either that request's normal result or `{"error": ...}`. Exit 0 means the batch ran; check `failed`.
 - **`mods list`** lists the mods of the data set without loading it (fast): `{modsFolder, otherModsFolders?, mods: [{title, dir, author, description, hasDat}]}`. `hasDat` false means the mod uses the game's data for this data set. Use `title` with `--mod`.
+- **`diff [kind] --mod M`** compares the mod's `.dat` with the game's current one (read-only, two loads, can't be in a `batch`). It returns `{fileVersion: {mod, game}, counts: {kind: {mod, game}}, changed, onlyInGame, onlyInMod, total, items}`. Each item has `status` (`changed`, `onlyInGame`, `onlyInMod`), `kind`, `id`, `name`, `internalName`, and for units `civs` (every civ with that same difference). Changed items list `fields: [{key, mod, game, ...labels}]`, with `null` on a side that lacks the field. `unlisted: true` means it also differs in data no field covers (attacks, armors, ...), which you can't read or fix with this CLI. `--fields` (needs a kind) limits the comparison and skips that check. `--civ` limits units to one civ. Page with `--limit`/`--offset`; the counts cover everything.
 
 ## Writing
 
@@ -96,8 +99,8 @@ Rules for every write:
 1. **Resolve with `lookup`, read with `get`, then write.** Use the IDs and field keys you resolved, never names. The field must have `editable: true` in `schema`.
 2. **Pass what you read as `--expect`** (or `expect` in a patch), so a change made in the meantime, in the NewAge editor or by another agent, is reported as `conflict` instead of being overwritten.
 3. **Dry run first, show the changes, then write.** `--dry-run` runs every check and reports `changes` without saving. Show the user each change as entity, civ, field, old value and new value, and write only after they agree (or already told you to go ahead with exactly that change).
-4. **Units are per civ.** `set` and each unit edit name one civ (`--civ N`, `"civ": N`). A change "for everyone" or "for the Spanish" is not one edit: write one edit per civ and list them all in the dry run, or tell the user it only reaches the civs you named. A global change to a unit's base stats means every civ's copy; civ bonuses and unique techs are effects, which are global, and are read-only for now.
-5. **One save per step.** `set` takes several `KEY=VALUE` pairs for one entity. For more than one entity, write a patch file and `apply` it: all edits are checked against the data, then applied, then saved once, or none are. `apply` reads the file, or stdin with `-`.
+4. **Units are per civ.** `set` and each unit edit name one civ (`--civ N`, `"civ": N`). A change "for everyone" or "for the Spanish" is not one edit: write one edit per civ and list them all in the dry run, or tell the user it only reaches the civs you named. A global change to a unit's base stats means every civ's copy; civ bonuses and unique techs are effects, which are global: one edit changes it for every civ that runs the effect.
+5. **One save per step.** `set` takes several `KEY=VALUE` pairs for one entity. For more than one entity, write a patch file and `apply` it. Edits run in order, each seeing the ones before it, and the file is saved once; if any edit fails, none are kept. `apply` reads the file, or stdin with `-`.
 6. **Writing the value that is already there** is reported under `unchanged` and doesn't save. A result with `saved: ""` and an empty `changes` means nothing was written.
 7. **After writing, `get` the entities again** (with `--mod`) and report the stored values, not what you meant to write.
 8. **Don't write a mod that is open in NewAge.** The editor doesn't watch the file, so its next save would overwrite the change (and the other way round). Ask the user to close the mod or keep the editor away from it.
@@ -107,9 +110,9 @@ Writes need a mod:
 
 - `mods list` shows the mods of the data set. Use a title with `--mod`. If the user names none, ask which mod to use. Never pick one yourself, and never write without one.
 - `mods create --title "Balance"` makes a new mod folder (ask the user for the title). It loads no data. `--from mod:NAME` starts from a copy of another mod's `.dat`; the default `game` starts from the game's data, and the mod's own `.dat` appears on its first write. A mod made for one data set has no `.dat` for another: `hasDat` says which.
-- A mod's `.dat` can be older than the game's after a game update. Compare `fileVersion` in `info` with and without `--mod` before writing, and tell the user when the mod is behind.
+- A mod's `.dat` can be older than the game's after a game update. Check `fileVersion` in `diff` (or `info` with and without `--mod`) before writing, and tell the user when the mod is behind.
 
-Value rules: ints must be whole numbers in the field's `min`..`max`; floats are read as decimals (`0.2`). `KEY=VALUE` on the command line is text that the CLI turns into a number, and a negative value is fine (`research_time=-1`). Use the numbers from `get`; labels (`label`, `text`) are never accepted as input.
+Value rules: ints must be whole numbers in the field's `min`..`max`; floats are read as decimals (`0.2`); strings are Latin-1 text up to `max` characters (in JSON, a string; on the command line, everything after `=`, so quote it in the shell). `KEY=VALUE` on the command line is text that the CLI turns into the field's type, and a negative value is fine (`research_time=-1`). Use the numbers from `get`; labels (`label`, `text`) are never accepted as input.
 
 `set` examples:
 
@@ -172,7 +175,19 @@ From the techs: unique techs have player-facing names, and the enable techs (`..
 
 **Finding effects that touch a unit**: there is no reverse-reference command yet. Read effects in pages with `batch` and `--compact` and filter for `commandN.unit`, `commandN.to_unit` or `commandN.class` matching the unit or its class.
 
-**Inside a mod**: `mods list` to get the title, then add `--mod "<title>"` to every call. To see what the mod changed, read the same entities with and without `--mod` and compare.
+**Inside a mod**: `mods list` to get the title, then add `--mod "<title>"` to every call. To see what the mod changes, run `diff --mod "<title>"`.
+
+**"My old mod broke after a game update"**: `diff --mod "<title>" --limit 0` first for `fileVersion`, `counts` and the totals, then page through `items` by kind (`diff unit --limit 100`, ...). A diff compares with the game's *current* data, so it mixes two things: the mod's own edits, and every game update since the mod was made, which the mod's old copy undoes. Tell them apart before suggesting a fix:
+
+- `onlyInGame` civs, units, techs and effects are newer than the mod. The mod's `.dat` lacks them, which is the usual cause of breakage (new civs missing, crashes or missing units in game).
+- Changes across many unrelated entities in the same fields (graphics, icons, names, new stats) are usually game updates. Changes that match the mod's description or title, and are consistent (the same field moved the same way across civs), are usually the mod's edits.
+- Say which is which and how sure you are; with no copy of the old game data you can't prove it either way.
+
+The fix is to rebuild the mod on the current data: create a new mod from the game (`mods create --title "<title> (updated)"`), and `apply` only the edits the user confirms are the mod's own, using the mod's values from the diff as `set` and the game's values as `expect`. Data that the CLI can't write (`unlisted` differences, added unit list entries) has to be redone in the NewAge editor; list those entities for the user.
+
+A tech or effect the mod *added* sits at an ID that a game update may since have given to something else (then `diff` shows it `changed` with unrelated names), or that the game now leaves empty. Don't overwrite the game's entity. Move the mod's tech and effect to free slots instead: a tech with `effect` -1, `civ` -1 and an empty `internal_name`, and an effect with `command_count` 0, that `diff` doesn't list. Read every field of the mod's tech and effect with `get --mod`, then write them in one patch: the effect's `command_count` and commands, and the tech's fields with `effect` pointing at the new effect ID. Check that nothing else in the mod referred to the old IDs (other techs' `required_techN`, Disable Tech commands).
+
+**"Give the Spanish villagers +10 HP"**: find the civ's tech-tree effect (`lookup effect spanish`), read its `command_count`, then one patch edit: `{"command_count": N+1, "commandN+1.type": 4, "commandN+1.unit": 83, "commandN+1.attribute": 0, "commandN+1.amount": 10}` with `"expect": {"command_count": N}`. A patch writes `command_count` first, then command types, then the rest, so the new command exists before its fields are set. Also cover the other villager units (or use `class` 4 with unit -1), and say which you chose.
 
 **"Make the Spanish unique tech cheaper"**: `lookup civ spanish`, `list tech --owner-civ <id>` or `lookup tech <name>`, then `get tech <id> --fields 'cost*,research_time'`. Ask which mod to use (`mods list`), run `set tech <id> cost1.amount=<new> --expect cost1.amount=<old> --mod <title> --dry-run`, show the change, then run it without `--dry-run` and `get` it again. Check `ownerCiv` is the civ the user means.
 

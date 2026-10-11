@@ -15,6 +15,11 @@ namespace newage {
 // order. Groups appear in the order of their first field.
 const QList<FieldDesc<genie::Unit>> &unitFields();
 
+// Sets every member unitFields() reads to zero, except Type, which decides
+// what else a unit stores. Two units whose masked copies serialize
+// differently also differ outside the listed fields.
+void maskUnitFields(genie::Unit &unit);
+
 // AGE's name for a unit Type value ("Combatant" for 70), or "Unknown". Views
 // show it as "70 - Combatant".
 QString unitTypeName(int type);

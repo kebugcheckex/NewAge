@@ -255,6 +255,11 @@ int main(int argc, char *argv[])
         if (positional.size() != 2)
             return usage(QStringLiteral("Expected apply PATCH.json|-."));
     }
+    else if (command == QStringLiteral("diff"))
+    {
+        if (positional.size() > 2)
+            return usage(QStringLiteral("Expected diff [kind]."));
+    }
     else if (command == QStringLiteral("mods"))
     {
         const QString subcommand = positional.value(1);
@@ -267,7 +272,7 @@ int main(int argc, char *argv[])
     {
         return usage(QStringLiteral("Expected info, schema [kind], lookup <table> [TEXT], list <kind>, "
                                     "get <kind> <id>..., batch FILE|-, set <kind> <id> KEY=VALUE..., "
-                                    "apply PATCH.json|-, mods list or mods create."));
+                                    "apply PATCH.json|-, diff [kind], mods list or mods create."));
     }
     // How messages name the command: "mods list", not "mods".
     const QString commandName = command == QStringLiteral("mods") ? QStringLiteral("mods ") + positional.at(1) : command;
@@ -276,7 +281,8 @@ int main(int argc, char *argv[])
     const bool sets = command == QStringLiteral("set");
     const bool applies = command == QStringLiteral("apply");
     const bool creates = command == QStringLiteral("mods") && positional.at(1) == QStringLiteral("create");
-    if (parser.isSet(civ) && command != QStringLiteral("lookup") && !lists && !gets && !sets)
+    const bool diffs = command == QStringLiteral("diff");
+    if (parser.isSet(civ) && command != QStringLiteral("lookup") && !lists && !gets && !sets && !diffs)
         return usage(QStringLiteral("--civ is not used by %1.").arg(commandName));
     if (parser.isSet(expect) && !sets)
         return usage(QStringLiteral("--expect is not used by %1.").arg(commandName));
@@ -289,16 +295,20 @@ int main(int argc, char *argv[])
     }
     if (creates && !parser.isSet(title))
         return usage(QStringLiteral("mods create needs --title."));
-    for (const QCommandLineOption &option : {ownerCiv, all, limit, offset})
+    for (const QCommandLineOption &option : {ownerCiv, all})
     {
         if (parser.isSet(option) && !lists)
             return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), commandName));
     }
-    for (const QCommandLineOption &option : {fields, compact})
+    for (const QCommandLineOption &option : {limit, offset})
     {
-        if (parser.isSet(option) && !gets)
+        if (parser.isSet(option) && !lists && !diffs)
             return usage(QStringLiteral("--%1 is not used by %2.").arg(option.names().first(), commandName));
     }
+    if (parser.isSet(fields) && !gets && !diffs)
+        return usage(QStringLiteral("--fields is not used by %1.").arg(commandName));
+    if (parser.isSet(compact) && !gets)
+        return usage(QStringLiteral("--compact is not used by %1.").arg(commandName));
     if (parser.isSet(dat) && (parser.isSet(game) || parser.isSet(dataset)))
         return usage(QStringLiteral("--dat cannot be combined with --game or --dataset."));
     if (parser.isSet(dat) != parser.isSet(version))
@@ -344,15 +354,17 @@ int main(int argc, char *argv[])
             ids.append(id);
         }
         request.insert(QStringLiteral("ids"), ids);
-        if (parser.isSet(fields))
-        {
-            QJsonArray keys;
-            for (const QString &key : parser.value(fields).split(QLatin1Char(',')))
-                keys.append(key.trimmed());
-            request.insert(QStringLiteral("fields"), keys);
-        }
         if (parser.isSet(compact))
             request.insert(QStringLiteral("compact"), true);
+    }
+    if (diffs && positional.size() == 2)
+        request.insert(QStringLiteral("kind"), positional.at(1));
+    if (parser.isSet(fields))
+    {
+        QJsonArray keys;
+        for (const QString &key : parser.value(fields).split(QLatin1Char(',')))
+            keys.append(key.trimmed());
+        request.insert(QStringLiteral("fields"), keys);
     }
     if (sets)
     {

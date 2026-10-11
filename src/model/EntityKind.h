@@ -1,6 +1,8 @@
 #pragma once
 
+#include <functional>
 #include <optional>
+#include <string>
 
 #include <QList>
 #include <QString>
@@ -45,6 +47,8 @@ struct FieldValue
     QString label;
     RefKind labelKind = RefKind::None;
     QString text;
+    // Whether `value` is a language string ID, which `text` resolves.
+    bool stringId = false;
 };
 
 // Descriptor metadata, including fields absent from the current data.
@@ -93,12 +97,29 @@ public:
     virtual QString internalName(const Session &session, int civ, int id) const = 0;
     // Applicable fields, in descriptor order. Empty when the entity is missing.
     virtual QList<FieldValue> fields(const Session &session, int civ, int id) const = 0;
+    // fields() without `label` and `text`, which cost a name lookup each: the
+    // form for comparing many entities.
+    virtual QList<FieldValue> values(const Session &session, int civ, int id) const = 0;
+    // The entity's bytes as genie writes them for `version` (a
+    // genie::GameVersion). `masked` first zeroes what fields() reads, so two
+    // entities whose masked bytes differ also differ outside the listed
+    // fields. Effect fields list the whole effect, so a masked effect is
+    // always the same. Empty for civs and missing or inactive entities.
+    virtual std::string rawData(const Session &session, int civ, int id, int version, bool masked) const = 0;
     virtual QList<FieldSchema> schema(const Session &session) const = 0;
     // Parses, range-checks and, when `commit` is true, stores. Marks the
     // session modified when the stored value changes. `commit` false is the
     // check `DataService` runs on every edit before it changes anything.
     virtual SetResult set(Session &session, int civ, int id, const QString &key, const QVariant &value,
                           bool commit = true) = 0;
+    // Copies the entity and returns what puts the copy back, for undoing a
+    // series of set() calls. Empty when the entity is missing or the kind
+    // has no fields.
+    virtual std::function<void()> backup(Session &session, int civ, int id) const = 0;
+    // When one request sets several keys of an entity, keys are written by
+    // ascending rank, then by key: a key whose fields depend on another
+    // (an effect command's slots on its type) ranks after it.
+    virtual int writeRank(const QString &) const { return 0; }
 
 protected:
     EntityKind() = default;

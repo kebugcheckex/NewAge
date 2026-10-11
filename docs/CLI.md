@@ -1,6 +1,6 @@
 # NewAge CLI: design for agent access
 
-Status: proposal, revision 4. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type and effect command Mode, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 is done: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is measured in section 3. P2 is done: `set`, `apply` (with `--expect` and `--dry-run`), `mods create` and the mod-only save rule are in the code, with the skill's write rules; `cli_test`, `cli_process_test` and `api_test` cover conflicts, atomic patches and the game-data guard. P3 is next.
+Status: proposal, revision 4. P0 (section 4.1) is in the code: field keys, numeric unit, tech and effect command Type and effect command Mode, `refName`, descriptor parsing, `EntityKind`, and `DataService`. Kinds stay in `newage_model`; `DataService` and `RequestHandler` are `newage_api`. P1 is done: `RequestHandler` and the `newage-cli` console executable serve `info`, `schema`, `lookup`, `list`, `get`, `batch` and `mods list` with shared source options; `cli_test` and `cli_process_test` check their JSON output. The DE load time is measured in section 3. P2 is done: `set`, `apply` (with `--expect` and `--dry-run`), `mods create` and the mod-only save rule are in the code, with the skill's write rules; `cli_test`, `cli_process_test` and `api_test` cover conflicts, atomic patches and the game-data guard. P3 has started: `diff` is in the code (section 6.6); `compare-civs` and `refs` are next. Effects and the remaining tech fields are editable, text fields included, and an effect's `command_count` adds and removes commands (section 8).
 
 ## 1. Goal
 
@@ -36,7 +36,7 @@ The CLI keeps the GUI's guarantees: the same fields, the same range checks, unit
 - **Some values are text, not numbers.** Unit `Type` and tech `Type` are read as strings (`"70 - Combatant"`, `"2 - Age"`). With numeric IDs everywhere, they must become ints with a label, like reference fields.
 - **Entity logic lives in Qt list models.** The label rule, whether a slot is in use, tech availability, the writers and the reference naming sit in `UnitListModel`, `TechListModel` and `EffectListModel`. The reference-naming switch is written out three times.
 - **Value parsing is private to `FieldTreeModel`** (`parseValue`) and reports only success or failure, not why.
-- **Effects are read-only** in the GUI, so they are read-only in the CLI until the GUI can edit them.
+- **Effects were read-only** in the GUI. Their descriptors now have setters, so the GUI and the CLI edit them alike.
 - **Every CLI call reloads the `.dat`.** Measured on 2026-10-04 against AoE2 DE's `empires2_x2_p1.dat` (12 MB, `VER 8.9`) on an i7-12700F from an NVMe SSD, with the file in the OS cache, median of 5 runs: a Release `newage-cli info` takes about 1.2 s, `get` the same, and a Debug build about 4.2 s. Nearly all of it is reading the `.dat`: a loose-file `--dat` open without language strings takes the same 1.2 s, and `mods list`, which loads no data, 18 ms. A `batch` of 10 `get` requests also takes 1.2 s, so section 6.4 (`batch`) keeps an agent's work at one load per step without a long-running process. A cold first read was not measured.
 
 ## 4. Architecture
@@ -128,7 +128,7 @@ newage-cli mods list
 newage-cli mods create --title T [--author A] [--description D] [--from game|mod:NAME]
 newage-cli compare-civs unit <id> [--fields ...]   # phase 3: which civ copies differ, section 7
 newage-cli refs <kind> <id>                        # phase 3: what refers to this entity
-newage-cli diff --against-game                     # phase 3: what the mod changed, field by field
+newage-cli diff [kind] --mod M [--civ N] [--fields ...] [--limit N --offset N]   # mod vs game, field by field, section 6.6
 ```
 
 - Every argument that names an entity, a civ or a reference value is a number. Field keys are the one textual identifier (section 6.1).
@@ -175,7 +175,7 @@ newage-cli lookup resource                 # the whole table: 0 Food Storage, 1 
 
 **Field keys stay textual.** Fields have no natural number: a number would be the descriptor's position, which shifts whenever a field is added, and a wrong number would silently edit a different field. A mistyped key fails with `unknown_field`. `schema` lists every key with its display name and type.
 
-`schema` with no kind returns `{"kinds": [...]}` in registry order. With a kind it returns `{"kind": "unit", "perCiv": true, "fields": [...]}`. Each field has `key`, `name`, `group`, `type`, and `editable`; editable integers also have `min` and `max`. Reference fields have `labelKind`. A `conditional` field may be absent on a particular entity; use `get` to see the applicable fields. Effects have a variable number of commands, so their schema uses `commandN.*` templates, where `N` is a one-based command number. A type such as `int|float` means the stored type depends on the command type. Schema uses the selected source's game version and requires an open data source.
+`schema` with no kind returns `{"kinds": [...]}` in registry order. With a kind it returns `{"kind": "unit", "perCiv": true, "fields": [...]}`. Each field has `key`, `name`, `group`, `type`, and `editable`; editable integers also have `min` and `max`, and editable strings have `max`, the longest text the field holds. Reference fields have `labelKind`. A `conditional` field may be absent on a particular entity; use `get` to see the applicable fields. Effects have a variable number of commands, so their schema uses `commandN.*` templates, where `N` is a one-based command number. A type such as `int|float` means the stored type depends on the command type. Schema uses the selected source's game version and requires an open data source.
 
 ### 6.2 Output shapes
 
@@ -250,7 +250,7 @@ Errors exit non-zero with a JSON body on stdout (warnings, such as missing langu
 
 ### 6.3 Patch files
 
-`apply` takes edits that succeed or fail together: all are checked against the loaded data, then applied, then saved once.
+`apply` takes edits that succeed or fail together. They are checked and applied one after another, so each edit sees the ones before it (an `expect` is compared with what the earlier edits left), and the file is saved once at the end. If any edit fails, or the save fails, every entity the patch touched is restored and nothing is saved. A dry run restores them too.
 
 ```json
 {
@@ -263,11 +263,11 @@ Errors exit non-zero with a JSON body on stdout (warnings, such as missing langu
 
 A result's `changes` list converts directly back into a patch (`old` as `expect`, or swapped to undo), so a dry run can be reviewed and then applied. `set` is a patch of one entity, and `apply` reads the file (or `-` for stdin) with the same rules.
 
-An edit's `set` is an object of key to number; `expect` has the same shape and only keys that `set` writes. A value may also be numeric text. A unit edit needs `civ` and a global kind takes none. Edits are checked in the order of the file, but the keys of one edit are applied in alphabetical order (JSON objects are unordered), which matters only when two keys of one entity depend on each other.
+An edit's `set` is an object of key to value; `expect` has the same shape and only keys that `set` writes. A number field takes a number or numeric text; a string field takes text, which must be Latin-1 (the `.dat` stores bytes) and no longer than the field's `max`. A unit edit needs `civ` and a global kind takes none. Edits run in the order of the file. JSON objects are unordered, so the keys of one edit run in a fixed order: for effects, `command_count` first, then each `commandN.type`, then the rest, so a patch can add commands and fill them in; otherwise alphabetical.
 
 ### 6.4 `batch`
 
-`batch` reads a JSON array of read requests (`info`, `schema`, `lookup`, `list`, `get`) from a file or stdin (`-`), loads the data once, and returns the results in the same order. A failed request returns its error in place; the others still run. Writes stay in `set` and `apply`, so a batch can never save by accident: a `set`, `apply` or `mods-create` request in a batch is `usage` in its place.
+`batch` reads a JSON array of read requests (`info`, `schema`, `lookup`, `list`, `get`) from a file or stdin (`-`), loads the data once, and returns the results in the same order. A failed request returns its error in place; the others still run. Writes stay in `set` and `apply`, so a batch can never save by accident: a `set`, `apply` or `mods-create` request in a batch is `usage` in its place, and so is `diff`, which loads a second file.
 
 ```json
 [
@@ -315,6 +315,40 @@ An edit's `set` is an object of key to number; `expect` has the same shape and o
 - `--mod` and the command options are rejected; `NEWAGE_MOD` is ignored, since the skill often sets it.
 - As a handler request: `{"op": "mods-list"}`. It can't be in a `batch`, which is for reads of the loaded data.
 
+### 6.6 `diff`
+
+`diff` compares the mod's `.dat` with the game's current `.dat` for the same data set, and lists every entity that differs. It is read-only. Its main use is a mod made for an older game version: the game's updates since then show up next to the mod's own edits, so it tells what the mod would undo or lacks.
+
+```json
+{
+  "mod": "C:/Users/.../mods/local/Balance",
+  "modDat": "C:/Users/.../mods/local/Balance/resources/_common/dat/empires2_x2_p1.dat",
+  "hasDat": true,
+  "gameDat": "C:/Games/AoE2DE/resources/_common/dat/empires2_x2_p1.dat",
+  "fileVersion": {"mod": "VER 8.8", "game": "VER 8.9"},
+  "counts": {"civ": {"mod": 60, "game": 63}, "unit": {"mod": 2701, "game": 2750}, "tech": {...}, "effect": {...}},
+  "changed": 884, "onlyInGame": 145, "onlyInMod": 5, "total": 1034,
+  "offset": 0, "limit": 2,
+  "items": [
+    {"status": "onlyInGame", "kind": "civ", "id": 60, "name": "Saxons", "internalName": "Saxons"},
+    {"status": "changed", "kind": "unit", "id": 125, "civs": [11], "name": "Monk", "internalName": "MONKX",
+     "fields": [{"key": "standing_graphic1", "mod": 998, "game": 19519}, {"key": "icon", "mod": 33, "game": 910}],
+     "unlisted": true}
+  ]
+}
+```
+
+- Entities are matched by ID. `status` is `changed`, `onlyInGame` (a civ, unit, tech or effect the mod predates, or a unit slot the mod emptied) or `onlyInMod`. Items come in kind order (civ, unit, tech, effect), then by ID. `name` and `internalName` are the mod's, or the game's when the mod lacks the entity or has a blank placeholder there (an empty internal name), which is how a game update's new techs look in an older mod.
+- `fields` (changed items only) are the fields whose stored values differ, in `schema` order, with `mod` and `game` values. A field that only one side has, such as an effect command past the other side's last, is `null` on the other side. `labelKind`, `modLabel`/`gameLabel` and `modText`/`gameText` annotate values as in `get`.
+- `unlisted: true` means the entity also differs in data no field covers yet (attacks, armors, damage graphics, ...; section 8). A changed item can have only that and an empty `fields`. It is not checked when `--fields` is given.
+- Units are compared in every civ both files have. Civs with the very same difference share one item, listed in `civs`. `--civ N` compares only that civ. Civs themselves are compared by presence only, since they have no fields yet.
+- Effect bytes that no field reads (parameters a command type ignores) are not differences.
+- Each side keeps its own file version. Entities are compared as the older of the two versions writes them, so a field that only the newer format stores doesn't make everything differ.
+- `[kind]` limits the comparison to one kind; `--fields` (key patterns, as in `get`) needs a kind and limits the fields compared. `changed`, `onlyInGame`, `onlyInMod` and `total` count every item; `--offset` and `--limit` page `items`.
+- `hasDat: false` means the mod has no `.dat` of its own, so it plays with the game's data and nothing is compared: totals are 0.
+- No mod is `mod_required` (exit 5) and a loose `.dat` is `mods_unsupported` (exit 2), both before loading. It loads both files, about twice an `info`'s time, plus the comparison (about 20 s for all of DE in a debug build). It can't be in a `batch`.
+- As a handler request: `{"op": "diff", "kind": "unit", "civ": 1, "fields": ["hit_points"], "offset": 0, "limit": 50}`, every member optional.
+
 ## 7. Civs and units
 
 How the data is laid out:
@@ -333,15 +367,18 @@ Future work (section 12): an all-civs write, including how to treat civs whose v
 
 ## 8. Field coverage
 
-The CLI reads and writes exactly what the descriptor tables describe, so the GUI and the CLI gain fields together. Coverage today is a small subset: of units, mostly identity, a few stats, costs and the first train location; of techs, costs, research time and location; effects read-only. Proposed order for new descriptors, judged by what balance and modding requests ask for:
+The CLI reads and writes exactly what the descriptor tables describe, so the GUI and the CLI gain fields together. Coverage today: of units, mostly identity, a few stats, costs and the first train location; of techs, every field but the ID (names and string IDs, type, civ, effect, icon, required techs and their count, costs, location, research time, button, hotkey); of effects, the internal name, the command count and every command field. Proposed order for new descriptors, judged by what balance and modding requests ask for:
 
-1. **Editable effect commands.** Civ bonuses, unique techs and upgrades are effects, so most balance changes are edits to effect amounts and targets.
-2. **Combat:** attacks and armours (class/amount lists), range, reload time, accuracy, blast, projectile unit, minimum range.
-3. **Units:** all train locations, garrison, population, creation flags, enabled flag, upgrade lines.
-4. **Techs:** required techs editable, `Civ` editable, all research locations (DE), repeatable (C15+).
-5. **Later:** graphics, sounds, terrain, civ resources, language strings (needs writing language files).
+1. **Combat:** attacks and armours (class/amount lists), range, reload time, accuracy, blast, projectile unit, minimum range.
+2. **Units:** all train locations, garrison, population, creation flags, enabled flag, upgrade lines.
+3. **Techs:** all research locations (DE), repeatable (C15+).
+4. **Later:** graphics, sounds, terrain, civ resources, language strings (needs writing language files).
 
-**Lists inside an entity** (attacks, armours, train locations, effect commands) are edited in place only: existing entries can be changed, none added or removed. Their keys are positional (`attack2.class`, `attack2.amount`, `train_location2`), which is stable precisely because entries don't move. Adding and removing entries has its own problems (counts stored alongside lists, other data referring to entries by position, per-version limits) and needs its own design, shared by the GUI and the CLI.
+**Lists inside an entity** (attacks, armours, train locations) are edited in place only: existing entries can be changed, none added or removed. Their keys are positional (`attack2.class`, `attack2.amount`, `train_location2`), which is stable precisely because entries don't move. Adding and removing entries has its own problems (counts stored alongside lists, other data referring to entries by position, per-version limits) and needs its own design, shared by the GUI and the CLI.
+
+Effect commands are the exception. Nothing refers to a command by position, so `command_count` resizes the list at the end: new commands have no type (255) and unused parameters (-1, amount 0), and shrinking drops the last ones. A new command's parameters are written after its type (section 6.3). A parameter its type doesn't use is hidden in `get` but can still be written, because the type that uses it may come later in the same patch. Fixed-size slots work the same way: a tech's unused required tech or cost entry can be filled in.
+
+**Adding entities** (a new tech or effect) is not supported. Writing into an unused slot is: a tech with no effect and an effect with no commands are free, and filling one in through a patch makes it a new tech or effect.
 
 ## 9. The agent skill
 
@@ -363,7 +400,7 @@ description: Read and edit Age of Empires, AoE II and Star Wars Galactic Battleg
 ## Rules
 - Use numeric IDs. Resolve every name with `newage-cli lookup`; if there are several matches, show them and ask.
 - Units are per civ: always pass --civ, and say which civ you read or changed. Techs are global. To change a unit in several civs, write one patch edit per civ and show them all in the dry run.
-- Only change existing entries; entries in lists (attacks, armours, train locations) can't be added or removed.
+- Only change existing entries; entries in unit lists (attacks, armours, train locations) can't be added or removed. Effect commands can: set `command_count`, then the new commands' fields, in one patch.
 - Only write into a mod. List mods with `newage-cli mods list`; create one (ask for a title) with `mods create`.
 - Read before writing, pass what you read as --expect, and run --dry-run first. Show the user the changes, then apply.
 - Use `batch` and multi-ID `get` to keep the number of calls down.
@@ -388,7 +425,8 @@ The GUI keeps data in memory and doesn't watch the file. If the CLI saves a mod'
 | P0 | Refactor (4.1): field keys, numeric `Type`, `refName`, descriptor parsing, `EntityKind`, `DataService`; list models delegate | Existing tests pass unchanged; key test added |
 | P1 | Read-only CLI: `info`, `schema`, `lookup`, `list`, `get`, `batch`, `mods list`; source options | `cli_test` covers each op and error code; DE load time measured and recorded here |
 | P2 (done) | Writes: `set`, `apply`, `--expect`, `--dry-run`, `mods create`, mod-only save rule; the skill file | Tests for conflicts, atomic patches and the game-data guard; round-trip test passes after a no-op save; skill tried on real requests |
-| P3 | `compare-civs`, `refs`, `diff --against-game` (all read-only) | `cli_test` covers each command |
+| P3 (`diff` done) | `compare-civs`, `refs`, `diff` (all read-only) | `cli_test` covers each command |
+| Fields (effects and techs done) | Section 8: editable effects and command counts, the remaining tech fields, text fields, sequential `apply` | `model_test` covers each descriptor; `cli_test` builds a tech and its effect in one patch and checks that a failed patch restores everything |
 
 Field coverage (section 8) grows alongside, in the GUI and the CLI together.
 
@@ -398,9 +436,10 @@ Not in this plan, but the design leaves room for each:
 
 - **Persistent session and MCP.** `RequestHandler` already takes JSON requests, so a `newage-cli serve` (one request per line on stdin, data kept in memory, explicit `save`) or an MCP server over stdio would be another front end, not a rewrite. Revisit if load time makes one load per call too slow even with `batch` (about 1.2 s per load on DE, section 3), or if a host needs MCP rather than a shell.
 - **All-civs unit writes** (section 7), with a rule for civs whose value already differs.
+- **Three-way `diff`** against a saved copy of the game's older `.dat` (`--base FILE`), to tell the mod's own edits from the game's later updates, and a patch of the mod's edits to replay onto a fresh mod with `apply`.
 - **Using the GUI's last game folder and mod** from `QSettings` as defaults for the CLI.
 - **Writing original game files**, which would at least need a backup and restore story. Out of scope.
-- **Adding and removing entries** in lists inside an entity (section 8). Needs a separate discussion.
+- **Adding and removing entries** in unit lists (section 8), and adding whole entities. Needs a separate discussion.
 
 ## 13. Open questions
 

@@ -41,6 +41,9 @@ struct HandlerResult
 // "unchanged"}` (docs/cli.md, section 6.2), and need the source's mod.
 // `{"op": "mods-create", "title": "T", "author"?, "description"?, "from"?}` makes
 // a mod without loading data. None of the three can be in a batch.
+// `{"op": "diff", "kind"?: "unit", "civ"?: 1, "fields"?: [...], "offset"?: 0,
+// "limit"?: 50}` compares the source's mod with the game's data (docs/cli.md,
+// section 6.6). It needs a mod, writes nothing, and can't be in a batch.
 // Source options stay on `source`, not in the request, because a batch
 // shares one open. Empty game, dataset, mod and mods-folder fields are filled
 // from the environment before opening.

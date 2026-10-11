@@ -82,6 +82,8 @@ private slots:
     void applyReadsPatchFileAndStdin();
     void modsCreateNeedsTitle();
     void modsCreateMakesAMod();
+    void diffRejectsBadArguments();
+    void diffShowsASet();
 };
 
 void CliProcessTest::missingCommandIsJsonUsage()
@@ -485,6 +487,13 @@ void CliProcessTest::setWritesAndReads()
                                 QStringLiteral("4"), QStringLiteral("--civ"), QStringLiteral("1"),
                                 QStringLiteral("--fields"), QStringLiteral("hit_points")});
     QCOMPARE(hitPointsIn(plain), original);
+
+    // A text field takes everything after "=", spaces included.
+    response = run(withGame(game, {QStringLiteral("set"), QStringLiteral("tech"), QStringLiteral("1"),
+                                   QStringLiteral("internal_name=Super villager 2")}));
+    QCOMPARE(response.exitCode, 0);
+    QCOMPARE(response.body.value(QStringLiteral("changes")).toArray().at(0).toObject().value(QStringLiteral("new")),
+             QJsonValue(QStringLiteral("Super villager 2")));
 }
 
 void CliProcessTest::applyReadsPatchFileAndStdin()
@@ -575,6 +584,59 @@ void CliProcessTest::modsCreateMakesAMod()
     const QJsonObject mod = listed.body.value(QStringLiteral("mods")).toArray().at(0).toObject();
     QCOMPARE(mod.value(QStringLiteral("title")).toString(), QStringLiteral("Castles"));
     QCOMPARE(mod.value(QStringLiteral("author")).toString(), QStringLiteral("Me"));
+}
+
+void CliProcessTest::diffRejectsBadArguments()
+{
+    const auto usageFor = [](const QStringList &arguments) {
+        const Response response = run(arguments);
+        QCOMPARE(response.exitCode, 1);
+        QCOMPARE(errorCode(response), QStringLiteral("usage"));
+    };
+    usageFor({QStringLiteral("diff"), QStringLiteral("unit"), QStringLiteral("tech")});
+    usageFor({QStringLiteral("diff"), QStringLiteral("--compact")});
+    usageFor({QStringLiteral("diff"), QStringLiteral("--all")});
+    usageFor({QStringLiteral("diff"), QStringLiteral("--fields"), QStringLiteral("hit_points")});
+    usageFor({QStringLiteral("diff"), QStringLiteral("tech"), QStringLiteral("--civ"), QStringLiteral("1")});
+    usageFor({QStringLiteral("list"), QStringLiteral("tech"), QStringLiteral("--fields"), QStringLiteral("name")});
+
+    // Without a mod there is nothing to compare, so nothing is loaded.
+    const Response response = run({QStringLiteral("diff")});
+    QCOMPARE(response.exitCode, 5);
+    QCOMPARE(errorCode(response), QStringLiteral("mod_required"));
+}
+
+void CliProcessTest::diffShowsASet()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeGame(game));
+    const int original = hitPointsIn(run(withGame(game, {QStringLiteral("get"), QStringLiteral("unit"),
+                                                         QStringLiteral("4"), QStringLiteral("--civ"),
+                                                         QStringLiteral("1"), QStringLiteral("--fields"),
+                                                         QStringLiteral("hit_points")})));
+    QVERIFY(original >= 0);
+    QCOMPARE(run(withGame(game, {QStringLiteral("set"), QStringLiteral("unit"), QStringLiteral("4"), QStringLiteral("--civ"),
+                                 QStringLiteral("1"), QStringLiteral("hit_points=") + QString::number(original + 1)}))
+                 .exitCode,
+             0);
+
+    const Response response = run(withGame(game, {QStringLiteral("diff"), QStringLiteral("unit"), QStringLiteral("--civ"),
+                                                  QStringLiteral("1"), QStringLiteral("--fields"), QStringLiteral("hit_points"),
+                                                  QStringLiteral("--limit"), QStringLiteral("5")}));
+    QCOMPARE(response.exitCode, 0);
+    QCOMPARE(response.body.value(QStringLiteral("kind")).toString(), QStringLiteral("unit"));
+    QCOMPARE(response.body.value(QStringLiteral("civ")).toInt(), 1);
+    QCOMPARE(response.body.value(QStringLiteral("limit")).toInt(), 5);
+    QCOMPARE(response.body.value(QStringLiteral("total")).toInt(), 1);
+    const QJsonObject item = response.body.value(QStringLiteral("items")).toArray().at(0).toObject();
+    QCOMPARE(item.value(QStringLiteral("id")).toInt(), 4);
+    const QJsonObject field = item.value(QStringLiteral("fields")).toArray().at(0).toObject();
+    QCOMPARE(field.value(QStringLiteral("key")).toString(), QStringLiteral("hit_points"));
+    QCOMPARE(field.value(QStringLiteral("mod")).toInt(), original + 1);
+    QCOMPARE(field.value(QStringLiteral("game")).toInt(), original);
 }
 
 QTEST_GUILESS_MAIN(CliProcessTest)

@@ -1,6 +1,8 @@
 #include "model/EntityKind.h"
 
 #include <cmath>
+#include <iostream>
+#include <sstream>
 
 #include <QHash>
 #include <QSet>
@@ -78,6 +80,8 @@ QList<FieldSchema> describe(const QList<FieldDesc<T>> &fields)
             row.minimum = field.minimum;
             row.maximum = field.maximum;
         }
+        else if (row.editable && row.type == QLatin1String("string"))
+            row.maximum = field.maximum;
         row.labelKind = field.ref;
         rows.append(row);
     }
@@ -117,8 +121,10 @@ QSet<int> techsDisabledByTree(const genie::DatFile &dat, int civ)
     return disabled;
 }
 
+// `labelled` false leaves `label` and `text` empty.
 template <typename T>
-QList<FieldValue> snapshot(const QList<FieldDesc<T>> &fields, const T &object, const Session &session, int civ)
+QList<FieldValue> snapshot(const QList<FieldDesc<T>> &fields, const T &object, const Session &session, int civ,
+                           bool labelled = true)
 {
     QList<FieldValue> rows;
     for (const FieldDesc<T> &field : fields)
@@ -137,14 +143,32 @@ QList<FieldValue> snapshot(const QList<FieldDesc<T>> &fields, const T &object, c
             row.minimum = field.minimum;
             row.maximum = field.maximum;
         }
+        else if (row.editable && row.type == QLatin1String("string"))
+            row.maximum = field.maximum;
         row.labelKind = field.ref;
-        if (field.ref != RefKind::None)
+        row.stringId = field.isStringId;
+        if (labelled && field.ref != RefKind::None)
             row.label = refName(session, field.ref, row.value.toInt(), civ);
-        if (field.isStringId)
+        if (labelled && field.isStringId)
             row.text = session.names().text(row.value.toInt());
         rows.append(row);
     }
     return rows;
+}
+
+// The bytes genie writes for `copy` at `version`. Writing can change the
+// object (an older version keeps one train location), hence the copy. A
+// vector whose stored count disagrees with its size prints a warning on
+// std::cerr; the bytes still hold every element, so the warning is dropped.
+template <typename T>
+std::string serialized(T copy, int version)
+{
+    copy.setGameVersion(static_cast<genie::GameVersion>(version));
+    std::ostringstream out;
+    std::streambuf *const errors = std::cerr.rdbuf(nullptr);
+    copy.writeObject(out);
+    std::cerr.rdbuf(errors);
+    return std::move(out).str();
 }
 
 template <typename T>
@@ -162,13 +186,15 @@ SetResult store(Session &session, T &object, const QList<FieldDesc<T>> &fields, 
     }
     if (!found)
         return rejected(QStringLiteral("unknown_field"), key);
-    if (found->applies && !found->applies(object))
+    if (!canSet(*found, object))
         return rejected(QStringLiteral("not_applicable"), key);
     if (!found->set)
         return rejected(QStringLiteral("read_only"), key);
 
     const QVariant current = found->get(object);
-    const int typeId = current.typeId() == QMetaType::Float ? QMetaType::Float : QMetaType::Int;
+    const int typeId = current.typeId() == QMetaType::Float || current.typeId() == QMetaType::QString
+                           ? current.typeId()
+                           : QMetaType::Int;
     const ParsedField parsed = parseFieldValue({typeId, found->minimum, found->maximum}, input);
     if (!parsed.code.isEmpty())
     {
@@ -225,6 +251,8 @@ public:
     }
 
     QList<FieldValue> fields(const Session &, int, int) const override { return {}; }
+    QList<FieldValue> values(const Session &, int, int) const override { return {}; }
+    std::string rawData(const Session &, int, int, int, bool) const override { return {}; }
     QList<FieldSchema> schema(const Session &) const override { return {}; }
 
     SetResult set(Session &session, int civ, int id, const QString &key, const QVariant &, bool) override
@@ -233,6 +261,8 @@ public:
             return rejected(QStringLiteral("unknown_entity"), QStringLiteral("no such entity"));
         return rejected(QStringLiteral("unknown_field"), key);
     }
+
+    std::function<void()> backup(Session &, int, int) const override { return {}; }
 };
 
 class UnitKind : public EntityKind
@@ -276,6 +306,23 @@ public:
         return snapshot(unitFields(), session.dat()->Civs[civ].Units[id], session, civ);
     }
 
+    QList<FieldValue> values(const Session &session, int civ, int id) const override
+    {
+        if (!isActive(session, civ, id))
+            return {};
+        return snapshot(unitFields(), session.dat()->Civs[civ].Units[id], session, civ, false);
+    }
+
+    std::string rawData(const Session &session, int civ, int id, int version, bool masked) const override
+    {
+        if (!isActive(session, civ, id))
+            return {};
+        genie::Unit unit = session.dat()->Civs[civ].Units[id];
+        if (masked)
+            maskUnitFields(unit);
+        return serialized(std::move(unit), version);
+    }
+
     QList<FieldSchema> schema(const Session &) const override { return describe(unitFields()); }
 
     SetResult set(Session &session, int civ, int id, const QString &key, const QVariant &value, bool commit) override
@@ -285,6 +332,15 @@ public:
         if (!isActive(session, civ, id))
             return rejected(QStringLiteral("inactive_entity"), QStringLiteral("inactive"));
         return store(session, session.dat()->Civs[civ].Units[id], unitFields(), key, value, commit);
+    }
+
+    std::function<void()> backup(Session &session, int civ, int id) const override
+    {
+        if (!openCiv(session, civ) || id < 0 || id >= count(session, civ))
+            return {};
+        return [&session, civ, id, copy = session.dat()->Civs[civ].Units[id]] {
+            session.dat()->Civs[civ].Units[id] = copy;
+        };
     }
 };
 
@@ -332,6 +388,24 @@ public:
         return snapshot(techFields(), ref, session, civ);
     }
 
+    QList<FieldValue> values(const Session &session, int civ, int id) const override
+    {
+        if (id < 0 || id >= count(session, civ))
+            return {};
+        TechRef ref{id, session.dat()->Techs[id]};
+        return snapshot(techFields(), ref, session, civ, false);
+    }
+
+    std::string rawData(const Session &session, int civ, int id, int version, bool masked) const override
+    {
+        if (id < 0 || id >= count(session, civ))
+            return {};
+        genie::Tech tech = session.dat()->Techs[id];
+        if (masked)
+            maskTechFields(tech);
+        return serialized(std::move(tech), version);
+    }
+
     QList<FieldSchema> schema(const Session &) const override { return describe(techFields()); }
 
     SetResult set(Session &session, int civ, int id, const QString &key, const QVariant &value, bool commit) override
@@ -340,6 +414,13 @@ public:
             return rejected(QStringLiteral("unknown_entity"), QStringLiteral("no such entity"));
         TechRef ref{id, session.dat()->Techs[id]};
         return store(session, ref, techFields(), key, value, commit);
+    }
+
+    std::function<void()> backup(Session &session, int civ, int id) const override
+    {
+        if (id < 0 || id >= count(session, civ))
+            return {};
+        return [&session, id, copy = session.dat()->Techs[id]] { session.dat()->Techs[id] = copy; };
     }
 };
 
@@ -382,6 +463,23 @@ public:
         return snapshot(effectFields(effect, session.gameVersion()), ref, session, civ);
     }
 
+    QList<FieldValue> values(const Session &session, int civ, int id) const override
+    {
+        if (!isActive(session, civ, id))
+            return {};
+        const genie::Effect &effect = session.dat()->Effects[id];
+        EffectRef ref{id, session.dat()->Effects[id]};
+        return snapshot(effectFields(effect, session.gameVersion()), ref, session, civ, false);
+    }
+
+    std::string rawData(const Session &session, int civ, int id, int version, bool masked) const override
+    {
+        if (!isActive(session, civ, id))
+            return {};
+        genie::Effect effect = masked ? genie::Effect() : session.dat()->Effects[id];
+        return serialized(std::move(effect), version);
+    }
+
     QList<FieldSchema> schema(const Session &session) const override
     {
         genie::Effect sample;
@@ -420,6 +518,24 @@ public:
             return rejected(QStringLiteral("unknown_entity"), QStringLiteral("no such entity"));
         EffectRef ref{id, session.dat()->Effects[id]};
         return store(session, ref, effectFields(session.dat()->Effects[id], session.gameVersion()), key, value, commit);
+    }
+
+    std::function<void()> backup(Session &session, int civ, int id) const override
+    {
+        if (!isActive(session, civ, id))
+            return {};
+        return [&session, id, copy = session.dat()->Effects[id]] { session.dat()->Effects[id] = copy; };
+    }
+
+    // The command count makes the commands exist, and a command's type
+    // decides which slot keys it has.
+    int writeRank(const QString &key) const override
+    {
+        if (key == QLatin1String("command_count"))
+            return 0;
+        if (key.startsWith(QLatin1String("command")) && key.endsWith(QLatin1String(".type")))
+            return 1;
+        return 2;
     }
 };
 

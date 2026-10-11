@@ -97,7 +97,8 @@ public:
             row.sprite = field.sprite;
             if (row.ref != RefKind::None && refNamer)
                 row.label = refNamer(row.ref, row.value.toInt());
-            if (field.set)
+            // Double-clicking an effect reference shows the effect instead.
+            if (field.set && field.ref != RefKind::Effect)
             {
                 row.field = static_cast<int>(i);
                 row.minimum = field.minimum;
@@ -120,8 +121,9 @@ public:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     Qt::ItemFlags flags(const QModelIndex &index) const override;
     // Accepts an int or a number string for int fields, a float or a string
-    // for float fields. Returns false for text that isn't a number, a value
-    // out of range, or a failed write. Writing the current value is a no-op.
+    // for float fields, text for string fields. Returns false for text that
+    // isn't a number, a value out of range, or a failed write. Writing the
+    // current value is a no-op.
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 

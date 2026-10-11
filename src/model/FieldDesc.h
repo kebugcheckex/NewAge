@@ -83,7 +83,8 @@ enum class SpriteKind
 
 // Describes one field of an entity type T (a unit, a tech, ...), so views can
 // show any entity without per-field widget code.
-// Only number fields can be editable; build those with numberField().
+// Editable fields are numbers or text; build those with numberField() and
+// textField().
 template <typename T>
 struct FieldDesc
 {
@@ -100,17 +101,31 @@ struct FieldDesc
     std::function<QVariant(const T &)> get;
     // The value is a language string ID; views show the string next to it.
     bool isStringId = false;
-    // Stores a value of the type get() returns (int or float), already
-    // checked against minimum/maximum. Empty for read-only fields.
+    // Stores a value of the type get() returns (int, float or string),
+    // already checked against minimum/maximum. Empty for read-only fields.
     std::function<void(T &, const QVariant &)> set = {};
-    // Range an int field accepts, inclusive. Unused for floats.
+    // Range an int field accepts, inclusive. For a string, `maximum` is the
+    // longest text it accepts. Unused for floats.
     int minimum = 0;
     int maximum = 0;
     RefKind ref = RefKind::None;
     SpriteKind sprite = SpriteKind::None;
     // Schema type, independent of whether a particular object has this field.
     int typeId = QMetaType::Int;
+    // Whether set() may store into this object. Empty means the same as
+    // `applies`. A field hidden while unused (a cost slot with no resource)
+    // stays writable, so a write can fill the slot.
+    std::function<bool(const T &)> settable = {};
 };
+
+// Whether `field` may be written on `object`.
+template <typename T>
+bool canSet(const FieldDesc<T> &field, const T &object)
+{
+    if (field.settable)
+        return field.settable(object);
+    return !field.applies || field.applies(object);
+}
 
 // An editable field for a number member of T. `access` returns a reference to
 // the member for a const or non-const object, typically
@@ -148,8 +163,25 @@ FieldDesc<T> numberField(const QString &key, const QString &name, const QString 
     return field;
 }
 
+// An editable field for a std::string member of T, read and written as
+// Latin-1 text of at most `maxLength` characters. `access` is as in
+// numberField().
+template <typename T, typename Access>
+FieldDesc<T> textField(const QString &key, const QString &name, const QString &group,
+                       std::function<bool(const T &)> applies, Access access, int maxLength)
+{
+    FieldDesc<T> field{key, name, group, std::move(applies), [access](const T &object) {
+                           return QVariant(QString::fromLatin1(access(object)));
+                       }};
+    field.set = [access](T &object, const QVariant &value) { access(object) = value.toString().toLatin1().toStdString(); };
+    field.maximum = maxLength;
+    field.typeId = QMetaType::QString;
+    return field;
+}
+
 // The part of a field descriptor that parsing needs: the stored type and, for
-// an int, the inclusive range. `typeId` is QMetaType::Float or an integer type.
+// an int, the inclusive range. `typeId` is QMetaType::Float, QMetaType::QString
+// or an integer type. A string's `maximum` is its longest length.
 struct FieldValueDesc
 {
     int typeId = QMetaType::Int;
@@ -157,10 +189,11 @@ struct FieldValueDesc
     int maximum = 0;
 };
 
-// A parsed edit. `value` is the int or float to store exactly when `code` is
-// empty. Otherwise `code` is "bad_value" or "out_of_range" and `value` is
-// invalid. An out-of-range `message` is "accepts <min>..<max>", so a caller
-// can prefix the field key.
+// A parsed edit. `value` is the int, float or string to store exactly when
+// `code` is empty. Otherwise `code` is "bad_value" or "out_of_range" and
+// `value` is invalid. An out-of-range `message` is "accepts <min>..<max>" (or
+// "accepts up to <max> characters"), so a caller can prefix the field key.
+// Strings must be Latin-1 without NUL characters.
 struct ParsedField
 {
     QVariant value;

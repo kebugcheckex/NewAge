@@ -190,6 +190,22 @@ QJsonObject modsCreate(const QString &title)
     return request;
 }
 
+QJsonObject diff(const QString &kind = {})
+{
+    QJsonObject request = op(QStringLiteral("diff"));
+    if (!kind.isEmpty())
+        request.insert(QStringLiteral("kind"), kind);
+    return request;
+}
+
+QList<int> intList(const QJsonValue &value)
+{
+    QList<int> list;
+    for (const QJsonValue &entry : value.toArray())
+        list.append(entry.toInt());
+    return list;
+}
+
 } // namespace
 
 class CliTest : public QObject
@@ -251,10 +267,16 @@ private slots:
     void setExpectConflict();
     void setRejectsBadValues();
     void applyIsAtomicAndRoundTrips();
+    void applyBuildsATechAndItsEffect();
+    void applyUndoesEveryEditOnFailure();
     void batchRejectsWrites();
     void modsCreateMakesAMod();
     void modsCreateFromMod();
     void modsCreateFails();
+    void diffChecksRequestBeforeOpen_data();
+    void diffChecksRequestBeforeOpen();
+    void diffNeedsAMod();
+    void diffComparesModWithGame();
 };
 
 void CliTest::init()
@@ -1747,6 +1769,138 @@ void CliTest::applyIsAtomicAndRoundTrips()
     QCOMPARE(QFileInfo(savePath).lastModified(), saved);
 }
 
+void CliTest::applyBuildsATechAndItsEffect()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeWritableGame(game));
+    const DataSource source = balanceSource(game);
+    const auto readItem = [&](const QString &kind, int id) {
+        const HandlerResult result = RequestHandler().handle(source, get(kind, {id}));
+        return result.body.value(QStringLiteral("items")).toArray().at(0).toObject();
+    };
+    const auto value = [](const QJsonObject &item, const QString &key) {
+        return fieldByKey(item, key).value(QStringLiteral("value"));
+    };
+    const int count = value(readItem(QStringLiteral("effect"), 0), QStringLiteral("command_count")).toInt();
+
+    // Keys sort as "command5.amount" < "command_count", so the count has to
+    // be written first on purpose: it makes the new commands exist.
+    const QString first = QStringLiteral("command%1.").arg(count + 1);
+    const QString second = QStringLiteral("command%1.").arg(count + 2);
+    const QJsonObject effect{{QStringLiteral("kind"), QStringLiteral("effect")},
+                             {QStringLiteral("id"), 0},
+                             {QStringLiteral("set"),
+                              QJsonObject{{QStringLiteral("internal_name"), QStringLiteral("Super villager")},
+                                          {QStringLiteral("command_count"), count + 2},
+                                          {first + QStringLiteral("type"), 4},
+                                          {first + QStringLiteral("class"), 4},
+                                          {first + QStringLiteral("attribute"), 0},
+                                          {first + QStringLiteral("amount"), 25},
+                                          {second + QStringLiteral("type"), 102},
+                                          {second + QStringLiteral("tech"), 22}}}};
+    const QJsonObject tech{{QStringLiteral("kind"), QStringLiteral("tech")},
+                           {QStringLiteral("id"), 0},
+                           {QStringLiteral("set"),
+                            QJsonObject{{QStringLiteral("internal_name"), QStringLiteral("Super villager")},
+                                        {QStringLiteral("effect"), 0},
+                                        {QStringLiteral("civ"), 2},
+                                        {QStringLiteral("icon"), 33},
+                                        {QStringLiteral("button"), 7},
+                                        {QStringLiteral("language_help"), 107368},
+                                        {QStringLiteral("cost3.resource"), 0},
+                                        {QStringLiteral("cost3.amount"), 10}}}};
+
+    QJsonObject patch = op(QStringLiteral("apply"));
+    patch.insert(QStringLiteral("edits"), QJsonArray{effect, tech});
+    const HandlerResult result = RequestHandler().handle(source, patch);
+    if (result.exitCode != 0)
+        QFAIL(qPrintable(QJsonDocument(result.body).toJson()));
+    const QJsonArray changes = result.body.value(QStringLiteral("changes")).toArray();
+    QCOMPARE(changes.at(0).toObject().value(QStringLiteral("key")).toString(), QStringLiteral("command_count"));
+
+    const QJsonObject savedEffect = readItem(QStringLiteral("effect"), 0);
+    QCOMPARE(value(savedEffect, QStringLiteral("internal_name")).toString(), QStringLiteral("Super villager"));
+    QCOMPARE(value(savedEffect, QStringLiteral("command_count")).toInt(), count + 2);
+    QCOMPARE(value(savedEffect, first + QStringLiteral("type")).toInt(), 4);
+    QCOMPARE(value(savedEffect, first + QStringLiteral("class")).toInt(), 4);
+    QCOMPARE(value(savedEffect, first + QStringLiteral("amount")).toDouble(), 25.0);
+    // The unit slot was never written, so it stays unused.
+    QVERIFY(fieldByKey(savedEffect, first + QStringLiteral("unit")).isEmpty());
+    QCOMPARE(value(savedEffect, second + QStringLiteral("tech")).toInt(), 22);
+
+    const QJsonObject savedTech = readItem(QStringLiteral("tech"), 0);
+    QCOMPARE(value(savedTech, QStringLiteral("internal_name")).toString(), QStringLiteral("Super villager"));
+    QCOMPARE(value(savedTech, QStringLiteral("effect")).toInt(), 0);
+    QCOMPARE(value(savedTech, QStringLiteral("civ")).toInt(), 2);
+    QCOMPARE(value(savedTech, QStringLiteral("icon")).toInt(), 33);
+    QCOMPARE(value(savedTech, QStringLiteral("button")).toInt(), 7);
+    QCOMPARE(value(savedTech, QStringLiteral("language_help")).toInt(), 107368);
+    QCOMPARE(value(savedTech, QStringLiteral("cost3.resource")).toInt(), 0);
+    QCOMPARE(value(savedTech, QStringLiteral("cost3.amount")).toInt(), 10);
+
+    // HD stores effect names in 31 bytes; text must be Latin-1.
+    const auto rename = [&](const QJsonValue &name) {
+        QJsonObject request = op(QStringLiteral("set"));
+        request.insert(QStringLiteral("kind"), QStringLiteral("effect"));
+        request.insert(QStringLiteral("id"), 0);
+        request.insert(QStringLiteral("set"), QJsonObject{{QStringLiteral("internal_name"), name}});
+        return errorCode(RequestHandler().handle(source, request));
+    };
+    QCOMPARE(rename(QString(31, QLatin1Char('x'))), QStringLiteral("out_of_range"));
+    QCOMPARE(rename(QStringLiteral("\u4e2d")), QStringLiteral("bad_value"));
+    QCOMPARE(rename(5), QStringLiteral("bad_value"));
+}
+
+void CliTest::applyUndoesEveryEditOnFailure()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeWritableGame(game));
+    const QString savePath = game.filePath(QStringLiteral("mods/Balance/resources/_common/dat/empires2_x2_p1.dat"));
+
+    DataService service;
+    QVERIFY(service.open(balanceSource(game)).ok);
+    const genie::Effect before = service.session().dat()->Effects.at(0);
+    const int count = static_cast<int>(before.EffectCommands.size());
+    const QString added = QStringLiteral("command%1.type").arg(count + 1);
+
+    // Each edit sees the ones before it; a later failure undoes them all,
+    // including the commands the count removed.
+    ApplyResult result = service.apply({{QStringLiteral("effect"), 0, -1, QStringLiteral("command_count"), 0},
+                                        {QStringLiteral("effect"), 0, -1, QStringLiteral("command_count"), count + 1},
+                                        {QStringLiteral("effect"), 0, -1, added, 4},
+                                        {QStringLiteral("effect"), 0, -1, QStringLiteral("nope"), 1}});
+    QVERIFY(!result.ok);
+    QCOMPARE(result.error.code, QStringLiteral("unknown_field"));
+    QVERIFY(result.changes.isEmpty());
+    QVERIFY(!service.session().isModified());
+    QVERIFY(!QFile::exists(savePath));
+    const genie::Effect &after = service.session().dat()->Effects.at(0);
+    QCOMPARE(static_cast<int>(after.EffectCommands.size()), count);
+    for (int i = 0; i < count; ++i)
+        QCOMPARE(int(after.EffectCommands.at(i).Type), int(before.EffectCommands.at(i).Type));
+
+    // An expect is checked against what the earlier edits left.
+    FieldEdit expecting{QStringLiteral("effect"), 0, -1, added, 5};
+    expecting.expect = 4;
+    result = service.apply({{QStringLiteral("effect"), 0, -1, QStringLiteral("command_count"), count + 1},
+                            {QStringLiteral("effect"), 0, -1, added, 4},
+                            expecting},
+                           true);
+    QVERIFY(result.ok);
+    QCOMPARE(result.changes.size(), 3);
+    QCOMPARE(result.changes.at(2).oldValue, QVariant(4));
+    // A dry run undoes its edits too.
+    QCOMPARE(static_cast<int>(service.session().dat()->Effects.at(0).EffectCommands.size()), count);
+    QVERIFY(!service.session().isModified());
+    QVERIFY(!QFile::exists(savePath));
+}
+
 void CliTest::batchRejectsWrites()
 {
     DataSource source;
@@ -1859,6 +2013,228 @@ void CliTest::modsCreateFails()
     DataSource cdSource;
     cdSource.gameDir = cd.path();
     failsWith(cdSource, modsCreate(QStringLiteral("Fresh")), 2, QStringLiteral("mods_unsupported"));
+}
+
+void CliTest::diffChecksRequestBeforeOpen_data()
+{
+    QTest::addColumn<QJsonObject>("request");
+    QTest::addColumn<int>("exitCode");
+    QTest::addColumn<QString>("code");
+
+    const auto with = [](QJsonObject request, const QString &key, const QJsonValue &value) {
+        request.insert(key, value);
+        return request;
+    };
+    QTest::newRow("kind is a number") << with(diff(), QStringLiteral("kind"), 4) << 1 << QStringLiteral("usage");
+    QTest::newRow("unknown kind") << diff(QStringLiteral("building")) << 3 << QStringLiteral("unknown_kind");
+    QTest::newRow("tech with civ") << with(diff(QStringLiteral("tech")), QStringLiteral("civ"), 1) << 1
+                                   << QStringLiteral("usage");
+    QTest::newRow("negative civ") << with(diff(), QStringLiteral("civ"), -1) << 1 << QStringLiteral("usage");
+    QTest::newRow("fields without kind") << with(diff(), QStringLiteral("fields"), QJsonArray{QStringLiteral("hit_points")})
+                                         << 1 << QStringLiteral("usage");
+    QTest::newRow("fields empty") << with(diff(QStringLiteral("unit")), QStringLiteral("fields"), QJsonArray()) << 1
+                                  << QStringLiteral("usage");
+    QTest::newRow("field is a number") << with(diff(QStringLiteral("unit")), QStringLiteral("fields"), QJsonArray{5}) << 1
+                                       << QStringLiteral("usage");
+    QTest::newRow("negative offset") << with(diff(), QStringLiteral("offset"), -1) << 1 << QStringLiteral("usage");
+    QTest::newRow("limit is text") << with(diff(), QStringLiteral("limit"), QStringLiteral("5")) << 1
+                                   << QStringLiteral("usage");
+}
+
+// The source has no data, so a request that reached the open would be
+// no_dataset, never these.
+void CliTest::diffChecksRequestBeforeOpen()
+{
+    QFETCH(QJsonObject, request);
+    QFETCH(int, exitCode);
+    QFETCH(QString, code);
+
+    DataSource source;
+    source.mod = QStringLiteral("Balance");
+    const HandlerResult result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, exitCode);
+    QCOMPARE(errorCode(result), code);
+}
+
+// The game's .dat files are empty, so a load would be load_failed.
+void CliTest::diffNeedsAMod()
+{
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeModdedGame(game));
+
+    DataSource source;
+    source.gameDir = game.path();
+    HandlerResult result = RequestHandler().handle(source, diff());
+    QCOMPARE(result.exitCode, 5);
+    QCOMPARE(errorCode(result), QStringLiteral("mod_required"));
+
+    source.mod = QStringLiteral("Nope");
+    QCOMPARE(errorCode(RequestHandler().handle(source, diff())), QStringLiteral("mod_not_found"));
+    source.mod = QStringLiteral("Balance");
+    QCOMPARE(errorCode(RequestHandler().handle(source, diff())), QStringLiteral("load_failed"));
+
+    result = RequestHandler().handle(tcSource(), diff());
+    QCOMPARE(result.exitCode, 2);
+    QCOMPARE(errorCode(result), QStringLiteral("mods_unsupported"));
+
+    result = RequestHandler().handle(source, batch({diff()}));
+    QCOMPARE(result.exitCode, 0);
+    const QJsonValue entry = result.body.value(QStringLiteral("results")).toArray().at(0);
+    QCOMPARE(errorCode(entry), QStringLiteral("usage"));
+    QVERIFY(entry.toObject().value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString().contains(
+        QStringLiteral("cannot be in a batch")));
+}
+
+// One mod .dat with an edit of each kind diff reports, made with genieutils
+// directly because some (an emptied slot, a removed tech) are not field sets.
+void CliTest::diffComparesModWithGame()
+{
+    if (!QFile::exists(kHdDat))
+        QSKIP("Sample data/empires2_x2_p1.dat not present.");
+    QTemporaryDir game;
+    QVERIFY(game.isValid());
+    QVERIFY(makeWritableGame(game));
+    const DataSource source = balanceSource(game);
+    const QString gameDat = game.filePath(QStringLiteral("resources/_common/dat/empires2_x2_p1.dat"));
+    const QString modDat = game.filePath(QStringLiteral("mods/Balance/resources/_common/dat/empires2_x2_p1.dat"));
+
+    // Without its own .dat the mod is the game's data: nothing to compare.
+    HandlerResult result = RequestHandler().handle(source, diff());
+    if (result.exitCode != 0)
+        QFAIL(qPrintable(result.body.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString()));
+    QCOMPARE(result.body.value(QStringLiteral("hasDat")).toBool(), false);
+    QCOMPARE(result.body.value(QStringLiteral("modDat")).toString(), forwardPath(modDat));
+    QCOMPARE(result.body.value(QStringLiteral("gameDat")).toString(), forwardPath(gameDat));
+    QCOMPARE(result.body.value(QStringLiteral("total")).toInt(), 0);
+    QCOMPARE(result.body.value(QStringLiteral("items")).toArray().size(), 0);
+    const QJsonObject techCount = result.body.value(QStringLiteral("counts")).toObject().value(QStringLiteral("tech")).toObject();
+    QCOMPARE(techCount.value(QStringLiteral("mod")), techCount.value(QStringLiteral("game")));
+    QVERIFY(!QFile::exists(modDat));
+
+    Session session;
+    QString error;
+    const GameDataset dataset = detectInstall(game.path()).at(0);
+    QVERIFY2(session.open(dataset, &error), qPrintable(error));
+    genie::DatFile &dat = *session.dat();
+    const int techCountBefore = static_cast<int>(dat.Techs.size());
+    QCOMPARE(dat.Civs.at(1).Units.at(4).HitPoints, dat.Civs.at(2).Units.at(4).HitPoints);
+    const int hitPoints = dat.Civs.at(1).Units.at(4).HitPoints;
+    QVERIFY(dat.Civs.at(4).UnitPointers.at(4) != 0);
+    int effectId = 0;
+    while (effectId < static_cast<int>(dat.Effects.size()) && dat.Effects.at(effectId).EffectCommands.empty())
+        ++effectId;
+    QVERIFY(effectId < static_cast<int>(dat.Effects.size()));
+    const int commands = static_cast<int>(dat.Effects.at(effectId).EffectCommands.size());
+    const int commandType = dat.Effects.at(effectId).EffectCommands.front().Type;
+    const QString effectName = QString::fromLatin1(dat.Effects.at(effectId).Name);
+    QVERIFY(!effectName.isEmpty());
+
+    dat.Civs.at(1).Units.at(4).HitPoints = hitPoints + 7;
+    dat.Civs.at(2).Units.at(4).HitPoints = hitPoints + 7;
+    dat.Civs.at(3).Units.at(4).Type50.DisplayedAttack += 1;
+    dat.Civs.at(4).UnitPointers.at(4) = 0;
+    dat.Techs.pop_back();
+    dat.Effects.at(effectId).EffectCommands.push_back(dat.Effects.at(effectId).EffectCommands.front());
+    dat.Effects.at(effectId).Name.clear();
+    QVERIFY(QDir().mkpath(QFileInfo(modDat).absolutePath()));
+    QVERIFY2(session.saveAs(modDat, &error), qPrintable(error));
+    const QDateTime gameWritten = QFileInfo(gameDat).lastModified();
+    const QDateTime modWritten = QFileInfo(modDat).lastModified();
+
+    result = RequestHandler().handle(source, diff());
+    if (result.exitCode != 0)
+        QFAIL(qPrintable(result.body.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString()));
+    QCOMPARE(result.body.value(QStringLiteral("hasDat")).toBool(), true);
+    const QJsonObject counts = result.body.value(QStringLiteral("counts")).toObject();
+    QCOMPARE(counts.value(QStringLiteral("tech")).toObject().value(QStringLiteral("mod")).toInt(), techCountBefore - 1);
+    QCOMPARE(counts.value(QStringLiteral("tech")).toObject().value(QStringLiteral("game")).toInt(), techCountBefore);
+    QCOMPARE(result.body.value(QStringLiteral("changed")).toInt(), 3);
+    QCOMPARE(result.body.value(QStringLiteral("onlyInGame")).toInt(), 2);
+    QCOMPARE(result.body.value(QStringLiteral("onlyInMod")).toInt(), 0);
+    QCOMPARE(result.body.value(QStringLiteral("total")).toInt(), 5);
+    const QJsonArray items = result.body.value(QStringLiteral("items")).toArray();
+    QCOMPARE(items.size(), 5);
+
+    // Kinds in registry order, then IDs; civs with the same change share an item.
+    const QJsonObject both = items.at(0).toObject();
+    QCOMPARE(both.value(QStringLiteral("status")).toString(), QStringLiteral("changed"));
+    QCOMPARE(both.value(QStringLiteral("kind")).toString(), QStringLiteral("unit"));
+    QCOMPARE(both.value(QStringLiteral("id")).toInt(), 4);
+    QCOMPARE(intList(both.value(QStringLiteral("civs"))), QList<int>({1, 2}));
+    QVERIFY(!both.value(QStringLiteral("name")).toString().isEmpty());
+    QCOMPARE(fieldKeys(both), QStringList{QStringLiteral("hit_points")});
+    QCOMPARE(fieldByKey(both, QStringLiteral("hit_points")).value(QStringLiteral("mod")).toInt(), hitPoints + 7);
+    QCOMPARE(fieldByKey(both, QStringLiteral("hit_points")).value(QStringLiteral("game")).toInt(), hitPoints);
+    QVERIFY(!both.contains(QStringLiteral("unlisted")));
+
+    const QJsonObject attack = items.at(1).toObject();
+    QCOMPARE(intList(attack.value(QStringLiteral("civs"))), QList<int>({3}));
+    QCOMPARE(fieldKeys(attack), QStringList());
+    QCOMPARE(attack.value(QStringLiteral("unlisted")).toBool(), true);
+
+    const QJsonObject emptied = items.at(2).toObject();
+    QCOMPARE(emptied.value(QStringLiteral("status")).toString(), QStringLiteral("onlyInGame"));
+    QCOMPARE(intList(emptied.value(QStringLiteral("civs"))), QList<int>({4}));
+    QCOMPARE(emptied.value(QStringLiteral("name")), both.value(QStringLiteral("name")));
+    QVERIFY(!emptied.contains(QStringLiteral("fields")));
+
+    const QJsonObject removed = items.at(3).toObject();
+    QCOMPARE(removed.value(QStringLiteral("status")).toString(), QStringLiteral("onlyInGame"));
+    QCOMPARE(removed.value(QStringLiteral("kind")).toString(), QStringLiteral("tech"));
+    QCOMPARE(removed.value(QStringLiteral("id")).toInt(), techCountBefore - 1);
+    QVERIFY(!removed.contains(QStringLiteral("civs")));
+
+    // The added command's fields exist only in the mod. A blank internal name
+    // looks like a placeholder, so the game's name is used.
+    const QJsonObject effect = items.at(4).toObject();
+    QCOMPARE(effect.value(QStringLiteral("kind")).toString(), QStringLiteral("effect"));
+    QCOMPARE(effect.value(QStringLiteral("id")).toInt(), effectId);
+    QCOMPARE(effect.value(QStringLiteral("internalName")).toString(), effectName);
+    QCOMPARE(fieldByKey(effect, QStringLiteral("internal_name")).value(QStringLiteral("mod")).toString(), QString());
+    const QJsonObject type = fieldByKey(effect, QStringLiteral("command%1.type").arg(commands + 1));
+    QCOMPARE(type.value(QStringLiteral("mod")).toInt(), commandType);
+    QVERIFY(type.value(QStringLiteral("game")).isNull());
+    QCOMPARE(type.value(QStringLiteral("labelKind")).toString(), QStringLiteral("effect-type"));
+    QVERIFY(type.contains(QStringLiteral("modLabel")));
+    QVERIFY(!type.contains(QStringLiteral("gameLabel")));
+
+    // Field patterns skip the unlisted check; presence still counts. Paging
+    // counts every item and returns a slice.
+    QJsonObject request = diff(QStringLiteral("unit"));
+    request.insert(QStringLiteral("fields"), QJsonArray{QStringLiteral("hit*")});
+    request.insert(QStringLiteral("offset"), 1);
+    request.insert(QStringLiteral("limit"), 1);
+    result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("kind")).toString(), QStringLiteral("unit"));
+    QCOMPARE(result.body.value(QStringLiteral("fields")).toArray(), QJsonArray{QStringLiteral("hit*")});
+    QCOMPARE(result.body.value(QStringLiteral("changed")).toInt(), 1);
+    QCOMPARE(result.body.value(QStringLiteral("total")).toInt(), 2);
+    QCOMPARE(result.body.value(QStringLiteral("offset")).toInt(), 1);
+    QCOMPARE(result.body.value(QStringLiteral("limit")).toInt(), 1);
+    const QJsonArray page = result.body.value(QStringLiteral("items")).toArray();
+    QCOMPARE(page.size(), 1);
+    QCOMPARE(intList(page.at(0).toObject().value(QStringLiteral("civs"))), QList<int>({4}));
+    request.remove(QStringLiteral("offset"));
+    request.remove(QStringLiteral("limit"));
+    request.insert(QStringLiteral("fields"), QJsonArray{QStringLiteral("nope")});
+    QCOMPARE(errorCode(RequestHandler().handle(source, request)), QStringLiteral("unknown_field"));
+
+    request = diff(QStringLiteral("unit"));
+    request.insert(QStringLiteral("civ"), 3);
+    result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, 0);
+    QCOMPARE(result.body.value(QStringLiteral("civ")).toInt(), 3);
+    QCOMPARE(result.body.value(QStringLiteral("total")).toInt(), 1);
+    QCOMPARE(result.body.value(QStringLiteral("items")).toArray().at(0).toObject().value(QStringLiteral("unlisted")).toBool(), true);
+    request.insert(QStringLiteral("civ"), 1000);
+    result = RequestHandler().handle(source, request);
+    QCOMPARE(result.exitCode, 3);
+    QCOMPARE(errorCode(result), QStringLiteral("unknown_entity"));
+
+    QCOMPARE(QFileInfo(gameDat).lastModified(), gameWritten);
+    QCOMPARE(QFileInfo(modDat).lastModified(), modWritten);
 }
 
 QTEST_GUILESS_MAIN(CliTest)

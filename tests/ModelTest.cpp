@@ -125,6 +125,13 @@ void checkEditableFields(const QList<FieldDesc<T>> &fields, T &object, const QSt
             continue;
         editable << field.name;
         QVERIFY2(!field.applies || field.applies(object), qPrintable(field.name));
+        if (field.get(object).typeId() == QMetaType::QString)
+        {
+            QVERIFY2(field.maximum > 0, qPrintable(field.name));
+            field.set(object, QStringLiteral("Edited"));
+            QCOMPARE(field.get(object), QVariant(QStringLiteral("Edited")));
+            continue;
+        }
         if (field.get(object).typeId() == QMetaType::Float)
         {
             field.set(object, 12.625f);
@@ -199,6 +206,7 @@ private slots:
     void fieldTreeEditing();
     void techIconMarkedForPreview();
     void effectFieldsListCommands();
+    void effectFieldsAreEditable();
     void effectClassAndAttributeNames();
     void sampleEffectValues();
     void referenceLabelFollowsEdits();
@@ -678,10 +686,12 @@ void ModelTest::editableFieldsRoundTrip()
     std::fill(tech.RequiredTechs.begin(), tech.RequiredTechs.end(), int16_t(0));
     TechRef ref{0, tech};
     checkEditableFields(techFields(), ref,
-                         {"Required tech 1", "Required tech 2", "Required tech 3", "Required tech 4", "Required tech 5",
-                          "Required tech 6", "Cost 1 resource", "Cost 1 amount", "Cost 1 paid", "Cost 2 resource",
+                         {"Internal name", "Language name", "Language description", "Language help",
+                          "Language tech tree", "Type", "Civ", "Effect", "Icon", "Full tech mode", "Required tech 1",
+                          "Required tech 2", "Required tech 3", "Required tech 4", "Required tech 5", "Required tech 6",
+                          "Required tech count", "Cost 1 resource", "Cost 1 amount", "Cost 1 paid", "Cost 2 resource",
                           "Cost 2 amount", "Cost 2 paid", "Cost 3 resource", "Cost 3 amount", "Cost 3 paid",
-                          "Location", "Research time"});
+                          "Location", "Research time", "Button", "Hotkey"});
     QCOMPARE(tech.RequiredTechs.at(0), int16_t(42));
     QCOMPARE(tech.ResearchLocations.front().QueueTime, int16_t(42));
 
@@ -701,7 +711,11 @@ void ModelTest::editableFieldsRoundTrip()
             return QString();
         });
     QVERIFY(edited.flags(fieldIndex(edited, QStringLiteral("Required tech 1"))) & Qt::ItemIsEditable);
-    QVERIFY(!(edited.flags(fieldIndex(edited, QStringLiteral("Required tech count"))) & Qt::ItemIsEditable));
+    QVERIFY(edited.flags(fieldIndex(edited, QStringLiteral("Required tech count"))) & Qt::ItemIsEditable);
+    // Double-clicking the effect shows it, so the row isn't edited in place.
+    QVERIFY(!(edited.flags(fieldIndex(edited, QStringLiteral("Effect"))) & Qt::ItemIsEditable));
+    QVERIFY(editField(edited, QStringLiteral("Internal name"), QStringLiteral("Renamed")));
+    QCOMPARE(tech.Name, std::string("Renamed"));
     QVERIFY(editField(edited, QStringLiteral("Required tech 1"), 5));
     QCOMPARE(tech.RequiredTechs.at(0), int16_t(5));
     QCOMPARE(fieldText(edited, QStringLiteral("Required tech 1")), QStringLiteral("Wheelbarrow (5)"));
@@ -757,6 +771,8 @@ void ModelTest::fieldKeysAreStable()
                           "internal_name",
                           "language_name",
                           "language_description",
+                          "language_help",
+                          "language_tech_tree",
                           "type",
                           "civ",
                           "effect",
@@ -780,7 +796,8 @@ void ModelTest::fieldKeysAreStable()
                           "cost3.paid",
                           "research_location",
                           "research_time",
-                          "button"}));
+                          "button",
+                          "hotkey"}));
 
     // Effect keys depend on each command's type; every type must still give
     // unique keys within its command.
@@ -1016,6 +1033,17 @@ void ModelTest::parseFieldValueRejects()
     QCOMPARE(parseFieldValue(los, 0.2f).value, QVariant(0.2f));
     // Floats have no range. A number an int field would refuse still parses.
     QVERIFY(parseFieldValue(FieldValueDesc{QMetaType::Float, -100, 100}, QStringLiteral("1000")).code.isEmpty());
+
+    // Strings are Latin-1 text up to `maximum` characters.
+    const FieldValueDesc name{QMetaType::QString, 0, 5};
+    QCOMPARE(parseFieldValue(name, QStringLiteral("Caf\u00e9")).value, QVariant(QStringLiteral("Caf\u00e9")));
+    QCOMPARE(parseFieldValue(name, QString()).value, QVariant(QString()));
+    const ParsedField longName = parseFieldValue(name, QStringLiteral("Archer"));
+    QCOMPARE(longName.code, QStringLiteral("out_of_range"));
+    QCOMPARE(longName.message, QStringLiteral("accepts up to 5 characters"));
+    QCOMPARE(parseFieldValue(name, QStringLiteral("\u4e2d")).code, QStringLiteral("bad_value"));
+    QCOMPARE(parseFieldValue(name, QString(QChar(0))).code, QStringLiteral("bad_value"));
+    QCOMPARE(parseFieldValue(name, 5).code, QStringLiteral("bad_value"));
 }
 
 void ModelTest::entityKindRegistry()
@@ -1310,6 +1338,63 @@ void ModelTest::editAndSaveSample()
     QVERIFY(!session.saveAs(dir.filePath(QStringLiteral("missing/edited.dat")), &error));
     QVERIFY(session.isModified());
     QCOMPARE(session.datPath(), dat);
+}
+
+void ModelTest::effectFieldsAreEditable()
+{
+    genie::Effect effect;
+    EffectRef ref{0, effect};
+    QList<FieldDesc<EffectRef>> fields;
+    const auto field = [&](const QString &key) -> const FieldDesc<EffectRef> & {
+        fields = effectFields(effect, genie::GV_C2);
+        const auto found = std::find_if(fields.begin(), fields.end(), [&](const auto &f) { return f.key == key; });
+        Q_ASSERT(found != fields.end());
+        return *found;
+    };
+
+    // The count adds commands with no type and unused slots.
+    field(QStringLiteral("command_count")).set(ref, 2);
+    QCOMPARE(effect.EffectCommands.size(), std::size_t(2));
+    QCOMPARE(int(effect.EffectCommands.at(1).Type), 255);
+    QCOMPARE(effect.EffectCommands.at(1).A, int16_t(-1));
+
+    field(QStringLiteral("command1.type")).set(ref, 4);
+    // An unused slot is hidden but can still be written.
+    const FieldDesc<EffectRef> &unit = field(QStringLiteral("command1.unit"));
+    QVERIFY(!unit.applies(ref));
+    QVERIFY(canSet(unit, ref));
+    QCOMPARE(unit.minimum, -32768);
+    unit.set(ref, 83);
+    QCOMPARE(effect.EffectCommands.at(0).A, int16_t(83));
+    field(QStringLiteral("command1.amount")).set(ref, 2.5f);
+    QCOMPARE(effect.EffectCommands.at(0).D, 2.5f);
+
+    // Disable Tech writes the tech ID into D.
+    field(QStringLiteral("command2.type")).set(ref, 102);
+    const FieldDesc<EffectRef> &tech = field(QStringLiteral("command2.tech"));
+    QCOMPARE(tech.minimum, -1);
+    QCOMPARE(tech.maximum, 32767);
+    tech.set(ref, 22);
+    QCOMPARE(effect.EffectCommands.at(1).D, 22.0f);
+    QCOMPARE(tech.get(ref), QVariant(22));
+
+    // Fixed-size names hold 30 characters; DE stores a length.
+    QCOMPARE(effectFields(effect, genie::GV_TC).at(1).maximum, 30);
+    QCOMPARE(effectFields(effect, genie::GV_C2).at(1).maximum, 255);
+    field(QStringLiteral("internal_name")).set(ref, QStringLiteral("Super Villager"));
+    QCOMPARE(effect.Name, std::string("Super Villager"));
+
+    // Shrinking drops commands from the end.
+    field(QStringLiteral("command_count")).set(ref, 1);
+    QCOMPARE(effect.EffectCommands.size(), std::size_t(1));
+    QCOMPARE(effect.EffectCommands.at(0).A, int16_t(83));
+
+    // The count comes first, then command types, then the rest.
+    QVERIFY(effectKind().writeRank(QStringLiteral("command_count"))
+            < effectKind().writeRank(QStringLiteral("command12.type")));
+    QVERIFY(effectKind().writeRank(QStringLiteral("command12.type"))
+            < effectKind().writeRank(QStringLiteral("command1.amount")));
+    QCOMPARE(techKind().writeRank(QStringLiteral("effect")), techKind().writeRank(QStringLiteral("civ")));
 }
 
 void ModelTest::effectFieldsListCommands()

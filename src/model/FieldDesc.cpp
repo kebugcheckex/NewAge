@@ -17,10 +17,27 @@ ParsedField rejectRange(int minimum, int maximum)
             QStringLiteral("accepts %1..%2").arg(minimum).arg(maximum)};
 }
 
+ParsedField parseText(const FieldValueDesc &field, const QVariant &input)
+{
+    if (input.typeId() != QMetaType::QString)
+        return {{}, QStringLiteral("bad_value"), QStringLiteral("not text")};
+    const QString text = input.toString();
+    for (const QChar c : text)
+    {
+        if (c.unicode() == 0 || c.unicode() > 0xFF)
+            return {{}, QStringLiteral("bad_value"), QStringLiteral("not Latin-1 text")};
+    }
+    if (text.size() > field.maximum)
+        return {{}, QStringLiteral("out_of_range"), QStringLiteral("accepts up to %1 characters").arg(field.maximum)};
+    return {QVariant(text)};
+}
+
 } // namespace
 
 ParsedField parseFieldValue(const FieldValueDesc &field, const QVariant &input)
 {
+    if (field.typeId == QMetaType::QString)
+        return parseText(field, input);
     // An already-typed number is used as-is, so a writer can hand set() the
     // value FieldTreeModel parsed without a locale-dependent round trip.
     if (field.typeId == QMetaType::Float

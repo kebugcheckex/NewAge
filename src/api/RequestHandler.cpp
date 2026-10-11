@@ -551,6 +551,11 @@ HandlerResult handleBatch(const DataSource &source, const QJsonObject &request)
             results[i] = usage(QStringLiteral("%1 writes and cannot be in a batch.").arg(batchedOp.toString()));
             continue;
         }
+        if (batchedOp == QStringLiteral("diff"))
+        {
+            results[i] = usage(QStringLiteral("diff loads the game's data too and cannot be in a batch."));
+            continue;
+        }
         Prepared ready;
         if (const std::optional<HandlerResult> bad = prepare(value.toObject(), ready))
             results[i] = *bad;
@@ -716,17 +721,23 @@ std::optional<EditProblem> readEdit(const QJsonObject &object, const QString &wh
             return problem(QStringLiteral("expect names \"%1\", which set does not write.").arg(it.key()));
     }
 
-    for (auto it = set.begin(); it != set.end(); ++it)
+    // JSON objects have no order; the kind's rank puts keys that others
+    // depend on first.
+    QStringList keys = set.keys();
+    std::stable_sort(keys.begin(), keys.end(), [kind](const QString &a, const QString &b) {
+        return kind->writeRank(a) < kind->writeRank(b);
+    });
+    for (const QString &key : keys)
     {
         FieldEdit edit = base;
-        edit.key = it.key();
-        if (!readValue(it.value(), edit.value))
-            return problem(QStringLiteral("The value of %1 must be a number.").arg(it.key()));
-        if (expect.contains(it.key()))
+        edit.key = key;
+        if (!readValue(set.value(key), edit.value))
+            return problem(QStringLiteral("The value of %1 must be a number or a string.").arg(key));
+        if (expect.contains(key))
         {
             QVariant expected;
-            if (!readValue(expect.value(it.key()), expected))
-                return problem(QStringLiteral("The expected value of %1 must be a number.").arg(it.key()));
+            if (!readValue(expect.value(key), expected))
+                return problem(QStringLiteral("The expected value of %1 must be a number or a string.").arg(key));
             edit.expect = expected;
         }
         out.append(edit);
@@ -819,6 +830,175 @@ HandlerResult handleModsCreate(const DataSource &source, const QJsonObject &requ
     return succeeded(body);
 }
 
+QString diffStatusName(DiffStatus status)
+{
+    switch (status)
+    {
+    case DiffStatus::Changed: return QStringLiteral("changed");
+    case DiffStatus::OnlyInGame: return QStringLiteral("onlyInGame");
+    case DiffStatus::OnlyInMod: return QStringLiteral("onlyInMod");
+    }
+    return {};
+}
+
+// A side's value, or null where the field doesn't apply.
+QJsonValue sideValue(const QVariant &value)
+{
+    return value.isValid() ? storedValue(value) : QJsonValue(QJsonValue::Null);
+}
+
+QJsonObject diffFieldObject(const DiffField &field)
+{
+    QJsonObject item;
+    item.insert(QStringLiteral("key"), field.key);
+    item.insert(QStringLiteral("mod"), sideValue(field.modValue));
+    item.insert(QStringLiteral("game"), sideValue(field.gameValue));
+    if (field.labelKind != RefKind::None)
+    {
+        item.insert(QStringLiteral("labelKind"), labelKindName(field.labelKind));
+        if (!field.modLabel.isEmpty())
+            item.insert(QStringLiteral("modLabel"), field.modLabel);
+        if (!field.gameLabel.isEmpty())
+            item.insert(QStringLiteral("gameLabel"), field.gameLabel);
+    }
+    if (!field.modText.isEmpty())
+        item.insert(QStringLiteral("modText"), field.modText);
+    if (!field.gameText.isEmpty())
+        item.insert(QStringLiteral("gameText"), field.gameText);
+    return item;
+}
+
+QJsonObject diffObject(const DataService &service, const DiffQuery &query, const DiffResult &diff)
+{
+    QJsonObject fileVersion;
+    fileVersion.insert(QStringLiteral("mod"), diff.modFileVersion);
+    fileVersion.insert(QStringLiteral("game"), diff.gameFileVersion);
+    QJsonObject counts;
+    for (const DiffCount &count : diff.counts)
+    {
+        QJsonObject pair;
+        pair.insert(QStringLiteral("mod"), count.mod);
+        pair.insert(QStringLiteral("game"), count.game);
+        counts.insert(count.kind, pair);
+    }
+
+    QJsonArray items;
+    for (const DiffItem &entity : diff.items)
+    {
+        QJsonObject item;
+        item.insert(QStringLiteral("status"), diffStatusName(entity.status));
+        item.insert(QStringLiteral("kind"), entity.kind);
+        item.insert(QStringLiteral("id"), entity.id);
+        if (!entity.civs.isEmpty())
+        {
+            QJsonArray civs;
+            for (const int civ : entity.civs)
+                civs.append(civ);
+            item.insert(QStringLiteral("civs"), civs);
+        }
+        item.insert(QStringLiteral("name"), entity.name);
+        item.insert(QStringLiteral("internalName"), entity.internalName);
+        if (entity.status == DiffStatus::Changed)
+        {
+            QJsonArray fields;
+            for (const DiffField &field : entity.fields)
+                fields.append(diffFieldObject(field));
+            item.insert(QStringLiteral("fields"), fields);
+        }
+        if (entity.unlisted)
+            item.insert(QStringLiteral("unlisted"), true);
+        items.append(item);
+    }
+
+    QJsonObject body;
+    body.insert(QStringLiteral("mod"), jsonPath(service.modDir()));
+    body.insert(QStringLiteral("modDat"), jsonPath(diff.modDat));
+    body.insert(QStringLiteral("hasDat"), diff.hasDat);
+    body.insert(QStringLiteral("gameDat"), jsonPath(diff.gameDat));
+    body.insert(QStringLiteral("fileVersion"), fileVersion);
+    body.insert(QStringLiteral("counts"), counts);
+    if (!query.kind.isEmpty())
+        body.insert(QStringLiteral("kind"), query.kind);
+    if (query.civ >= 0)
+        body.insert(QStringLiteral("civ"), query.civ);
+    if (!query.fields.isEmpty())
+        body.insert(QStringLiteral("fields"), QJsonArray::fromStringList(query.fields));
+    body.insert(QStringLiteral("changed"), diff.changed);
+    body.insert(QStringLiteral("onlyInGame"), diff.onlyInGame);
+    body.insert(QStringLiteral("onlyInMod"), diff.onlyInMod);
+    body.insert(QStringLiteral("total"), diff.total);
+    body.insert(QStringLiteral("offset"), query.offset);
+    if (query.limit >= 0)
+        body.insert(QStringLiteral("limit"), query.limit);
+    body.insert(QStringLiteral("items"), items);
+    return body;
+}
+
+// Compares the source's mod with the game. A missing mod is caught before
+// the slow data load.
+HandlerResult handleDiff(const DataSource &source, const QJsonObject &request)
+{
+    DiffQuery query;
+    const QJsonValue kindValue = request.value(QStringLiteral("kind"));
+    if (!kindValue.isUndefined() && (!kindValue.isString() || kindValue.toString().isEmpty()))
+        return usage(QStringLiteral("diff kind must be a string."));
+    query.kind = kindValue.toString();
+    const EntityKind *kind = nullptr;
+    if (!query.kind.isEmpty())
+    {
+        kind = findEntityKind(query.kind);
+        if (!kind)
+            return failed(unknownKind(query.kind, QStringLiteral("Unknown kind \"%1\".").arg(query.kind)));
+    }
+
+    const QJsonValue civValue = request.value(QStringLiteral("civ"));
+    if (!civValue.isUndefined())
+    {
+        if (kind && !kind->perCiv())
+            return usage(QStringLiteral("diff %1 takes no civ.").arg(query.kind));
+        if (!readInt(civValue, query.civ) || query.civ < 0)
+            return usage(QStringLiteral("civ must be a non-negative integer."));
+    }
+
+    const QJsonValue fieldsValue = request.value(QStringLiteral("fields"));
+    if (!fieldsValue.isUndefined())
+    {
+        if (!kind)
+            return usage(QStringLiteral("diff fields need a kind."));
+        if (!fieldsValue.isArray() || fieldsValue.toArray().isEmpty())
+            return usage(QStringLiteral("fields must be a non-empty array of keys."));
+        for (const QJsonValue &fieldValue : fieldsValue.toArray())
+        {
+            if (!fieldValue.isString() || fieldValue.toString().trimmed().isEmpty())
+                return usage(QStringLiteral("fields must be a non-empty array of keys."));
+            query.fields.append(fieldValue.toString().trimmed());
+        }
+    }
+
+    const QJsonValue offsetValue = request.value(QStringLiteral("offset"));
+    if (!offsetValue.isUndefined() && (!readInt(offsetValue, query.offset) || query.offset < 0))
+        return usage(QStringLiteral("offset must be a non-negative integer."));
+    const QJsonValue limitValue = request.value(QStringLiteral("limit"));
+    if (!limitValue.isUndefined() && (!readInt(limitValue, query.limit) || query.limit < 0))
+        return usage(QStringLiteral("limit must be a non-negative integer."));
+
+    const DataSource resolved = resolveSource(source);
+    if (!resolved.datPath.isEmpty())
+        return failed(makeError(QStringLiteral("mods_unsupported"), QStringLiteral("A loose data file has no mods.")));
+    if (resolved.mod.isEmpty())
+        return failed(makeError(QStringLiteral("mod_required"), QStringLiteral("diff needs a mod (--mod).")));
+
+    DataService service;
+    const OpenResult opened = service.open(resolved);
+    if (!opened.ok)
+        return failed(opened.error, opened.warnings);
+    const DiffResult diff = service.diff(query);
+    const QStringList warnings = opened.warnings + diff.warnings;
+    if (!diff.ok)
+        return failed(diff.error, warnings);
+    return succeeded(diffObject(service, query, diff), warnings);
+}
+
 } // namespace
 
 int exitCodeFor(const QString &code)
@@ -854,6 +1034,8 @@ HandlerResult RequestHandler::handle(const DataSource &source, const QJsonObject
         return handleWrite(source, request);
     if (request.value(QStringLiteral("op")) == QStringLiteral("mods-create"))
         return handleModsCreate(source, request);
+    if (request.value(QStringLiteral("op")) == QStringLiteral("diff"))
+        return handleDiff(source, request);
 
     Prepared prepared;
     if (const std::optional<HandlerResult> bad = prepare(request, prepared))

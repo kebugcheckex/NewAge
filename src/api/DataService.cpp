@@ -1,11 +1,15 @@
 #include "api/DataService.h"
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QRegularExpression>
+#include <QSet>
 
 #include "core/Mods.h"
 #include "core/VersionProfile.h"
@@ -215,6 +219,109 @@ QString unmatchedPattern(const QStringList &fields, const QList<FieldSchema> &sc
             return field;
     }
     return {};
+}
+
+// Whether `session` has entity `id`: a filled unit slot, or any other ID in
+// range. A tech the civ can't research is still there.
+bool present(const EntityKind &kind, const Session &session, int civ, int id)
+{
+    if (kind.perCiv())
+        return kind.isActive(session, civ, id);
+    return id >= 0 && id < kind.count(session, civ);
+}
+
+// Stored values compare exactly, except that two NaNs are the same value.
+bool sameValue(const QVariant &a, const QVariant &b)
+{
+    if (a.typeId() == QMetaType::Float && b.typeId() == QMetaType::Float && std::isnan(a.toFloat())
+        && std::isnan(b.toFloat()))
+        return true;
+    return a == b;
+}
+
+// One entity's difference, before names and labels.
+struct EntityDiff
+{
+    DiffStatus status = DiffStatus::Changed;
+    QList<DiffField> fields;
+    bool unlisted = false;
+};
+
+bool sameDiff(const EntityDiff &a, const EntityDiff &b)
+{
+    if (a.status != b.status || a.unlisted != b.unlisted || a.fields.size() != b.fields.size())
+        return false;
+    for (qsizetype i = 0; i < a.fields.size(); ++i)
+    {
+        const DiffField &x = a.fields.at(i);
+        const DiffField &y = b.fields.at(i);
+        if (x.key != y.key || !sameValue(x.modValue, y.modValue) || !sameValue(x.gameValue, y.gameValue))
+            return false;
+    }
+    return true;
+}
+
+// The fields whose values differ, in the game's field order, then the fields
+// only the mod has. Empty `patterns` keep every key.
+QList<DiffField> fieldDifferences(const QList<FieldValue> &mod, const QList<FieldValue> &game,
+                                  const QList<QRegularExpression> &patterns)
+{
+    QHash<QString, qsizetype> modIndex;
+    for (qsizetype i = 0; i < mod.size(); ++i)
+        modIndex.insert(mod.at(i).key, i);
+
+    QList<DiffField> fields;
+    const auto add = [&](const FieldValue &field, const QVariant &modValue, const QVariant &gameValue) {
+        if (sameValue(modValue, gameValue) || (!patterns.isEmpty() && !matchesAny(patterns, field.key)))
+            return;
+        DiffField row;
+        row.key = field.key;
+        row.labelKind = field.labelKind;
+        row.stringId = field.stringId;
+        row.modValue = modValue;
+        row.gameValue = gameValue;
+        fields.append(row);
+    };
+    QSet<QString> gameKeys;
+    for (const FieldValue &field : game)
+    {
+        gameKeys.insert(field.key);
+        const auto found = modIndex.constFind(field.key);
+        add(field, found == modIndex.cend() ? QVariant() : mod.at(*found).value, field.value);
+    }
+    for (const FieldValue &field : mod)
+    {
+        if (!gameKeys.contains(field.key))
+            add(field, field.value, QVariant());
+    }
+    return fields;
+}
+
+// How entity `id` differs between the two files, or nothing when it doesn't.
+// `version` is the genie version both sides are written as before their bytes
+// are compared; equal bytes skip the field comparison.
+std::optional<EntityDiff> compareEntity(const EntityKind &kind, const Session &mod, const Session &game, int civ,
+                                        int id, int version, const QList<QRegularExpression> &patterns)
+{
+    const bool inMod = present(kind, mod, civ, id);
+    const bool inGame = present(kind, game, civ, id);
+    if (!inMod && !inGame)
+        return std::nullopt;
+    EntityDiff diff;
+    if (!inMod || !inGame)
+    {
+        diff.status = inMod ? DiffStatus::OnlyInMod : DiffStatus::OnlyInGame;
+        return diff;
+    }
+    if (kind.rawData(mod, civ, id, version, false) == kind.rawData(game, civ, id, version, false))
+        return std::nullopt;
+    diff.fields = fieldDifferences(kind.values(mod, civ, id), kind.values(game, civ, id), patterns);
+    if (patterns.isEmpty())
+        diff.unlisted = kind.rawData(mod, civ, id, version, true) != kind.rawData(game, civ, id, version, true);
+    // Bytes no field reads, such as effect parameters a command type ignores.
+    if (diff.fields.isEmpty() && !diff.unlisted)
+        return std::nullopt;
+    return diff;
 }
 
 } // namespace
@@ -656,98 +763,65 @@ ApplyResult DataService::apply(const QList<FieldEdit> &edits, bool dryRun)
         return result;
     }
 
-    struct Planned
-    {
-        FieldEdit edit;
-        EntityKind *kind = nullptr;
-        QVariant oldValue;
-        QVariant newValue;
-        bool changed = false;
+    // Edits are checked and stored in order, so one can depend on an earlier
+    // one (a new command's slots on its type). Each entity is copied before
+    // its first change; a failure or a dry run puts every copy back.
+    const bool wasModified = session_.isModified();
+    QList<std::function<void()>> restores;
+    QSet<QString> backedUp;
+    const auto restore = [&] {
+        for (auto it = restores.rbegin(); it != restores.rend(); ++it)
+            (*it)();
+        session_.setModified(wasModified);
+    };
+    const auto fail = [&](const ServiceError &error) {
+        restore();
+        result.changes.clear();
+        result.unchanged.clear();
+        result.error = error;
+        return result;
     };
 
-    const auto toChange = [](const Planned &item) {
-        FieldChange change;
-        change.kind = item.edit.kind;
-        change.id = item.edit.id;
-        change.civ = item.kind->perCiv() ? item.edit.civ : -1;
-        change.key = item.edit.key;
-        change.oldValue = item.oldValue;
-        change.newValue = item.newValue;
-        return change;
-    };
-
-    QList<Planned> planned;
     for (const FieldEdit &edit : edits)
     {
         EntityKind *kind = findEntityKind(edit.kind);
         if (!kind)
-        {
-            result.error = editError(edit, QStringLiteral("unknown_kind"),
-                                     QStringLiteral("Unknown kind \"%1\".").arg(edit.kind));
-            return result;
-        }
+            return fail(editError(edit, QStringLiteral("unknown_kind"),
+                                  QStringLiteral("Unknown kind \"%1\".").arg(edit.kind)));
+        const int civ = kind->perCiv() ? edit.civ : -1;
         const SetResult checked = kind->set(session_, edit.civ, edit.id, edit.key, edit.value, false);
         if (!checked.ok)
-        {
-            result.error = editError(edit, checked.code, checked.message);
-            return result;
-        }
+            return fail(editError(edit, checked.code, checked.message));
         if (edit.expect && !sameStored(checked.oldValue, *edit.expect))
         {
-            result.error = editError(edit, QStringLiteral("conflict"),
-                                     QStringLiteral("%1 is %2, not %3.")
-                                         .arg(edit.key, checked.oldValue.toString(), edit.expect->toString()));
-            return result;
+            return fail(editError(edit, QStringLiteral("conflict"),
+                                  QStringLiteral("%1 is %2, not %3.")
+                                      .arg(edit.key, checked.oldValue.toString(), edit.expect->toString())));
         }
-        planned.append({edit, kind, checked.oldValue, checked.newValue, checked.changed});
-    }
 
-    if (dryRun)
-    {
-        result.ok = true;
-        for (const Planned &item : planned)
+        FieldChange change{edit.kind, edit.id, civ, edit.key, checked.oldValue, checked.newValue};
+        if (!checked.changed)
         {
-            if (item.changed)
-                result.changes.append(toChange(item));
-            else
-                result.unchanged.append(toChange(item));
-        }
-        return result;
-    }
-
-    const bool wasModified = session_.isModified();
-    QList<Planned> committed;
-    const auto revert = [&] {
-        for (auto it = committed.rbegin(); it != committed.rend(); ++it)
-            it->kind->set(session_, it->edit.civ, it->edit.id, it->edit.key, it->oldValue, true);
-        session_.setModified(wasModified);
-    };
-
-    for (const Planned &item : planned)
-    {
-        if (!item.changed)
-        {
-            result.unchanged.append(toChange(item));
+            result.unchanged.append(change);
             continue;
         }
-        const SetResult stored = item.kind->set(session_, item.edit.civ, item.edit.id, item.edit.key, item.edit.value, true);
-        if (!stored.ok)
+        const QString entity = QStringLiteral("%1/%2/%3").arg(edit.kind).arg(civ).arg(edit.id);
+        if (!backedUp.contains(entity))
         {
-            revert();
-            result.changes.clear();
-            result.unchanged.clear();
-            result.error = editError(item.edit, stored.code, stored.message);
-            return result;
+            backedUp.insert(entity);
+            if (std::function<void()> undo = kind->backup(session_, edit.civ, edit.id))
+                restores.append(std::move(undo));
         }
-        Planned done = item;
-        done.oldValue = stored.oldValue;
-        done.newValue = stored.newValue;
-        committed.append(done);
-        result.changes.append(toChange(done));
+        const SetResult stored = kind->set(session_, edit.civ, edit.id, edit.key, edit.value, true);
+        if (!stored.ok)
+            return fail(editError(edit, stored.code, stored.message));
+        change.newValue = stored.newValue;
+        result.changes.append(change);
     }
 
-    if (committed.isEmpty())
+    if (dryRun || result.changes.isEmpty())
     {
+        restore();
         result.ok = true;
         return result;
     }
@@ -755,35 +829,213 @@ ApplyResult DataService::apply(const QList<FieldEdit> &edits, bool dryRun)
     const QString directory = QFileInfo(savePath_).absolutePath();
     if (!QDir().mkpath(directory))
     {
-        revert();
-        result.changes.clear();
-        result.unchanged.clear();
-        result.error = makeError(QStringLiteral("save_failed"),
-                                 QStringLiteral("Couldn't create %1.").arg(QDir::toNativeSeparators(directory)));
-        return result;
+        return fail(makeError(QStringLiteral("save_failed"),
+                              QStringLiteral("Couldn't create %1.").arg(QDir::toNativeSeparators(directory))));
     }
     if (isGameDataFile(gameDataset_, savePath_))
-    {
-        revert();
-        result.changes.clear();
-        result.unchanged.clear();
-        result.error = makeError(QStringLiteral("game_data_protected"),
-                                 QStringLiteral("Refusing to write the game's data file."));
-        return result;
-    }
+        return fail(makeError(QStringLiteral("game_data_protected"), QStringLiteral("Refusing to write the game's data file.")));
 
     QString saveError;
     if (!session_.saveAs(savePath_, &saveError))
-    {
-        revert();
-        result.changes.clear();
-        result.unchanged.clear();
-        result.error = makeError(QStringLiteral("save_failed"), saveError);
-        return result;
-    }
+        return fail(makeError(QStringLiteral("save_failed"), saveError));
 
     result.ok = true;
     result.saved = QDir::fromNativeSeparators(QDir::cleanPath(savePath_));
+    return result;
+}
+
+DiffResult DataService::diff(const DiffQuery &query) const
+{
+    DiffResult result;
+    if (!session_.isOpen())
+    {
+        result.error = makeError(QStringLiteral("load_failed"), QStringLiteral("No data is open."));
+        return result;
+    }
+    if (loose_ || !supportsMods(gameDataset_))
+    {
+        result.error = makeError(QStringLiteral("mods_unsupported"), QStringLiteral("This data set has no mods."));
+        return result;
+    }
+    if (modDir_.isEmpty())
+    {
+        result.error = makeError(QStringLiteral("mod_required"), QStringLiteral("diff compares a mod with the game."));
+        return result;
+    }
+    const EntityKind *only = nullptr;
+    if (!query.kind.isEmpty())
+    {
+        only = findEntityKind(query.kind);
+        if (!only)
+        {
+            result.error = unknownKind(query.kind, QStringLiteral("Unknown kind \"%1\".").arg(query.kind));
+            return result;
+        }
+    }
+    if (!query.fields.isEmpty())
+    {
+        if (!only)
+        {
+            result.error = makeError(QStringLiteral("usage"), QStringLiteral("Field patterns need a kind."));
+            return result;
+        }
+        if (const QString field = unmatchedPattern(query.fields, only->schema(session_)); !field.isEmpty())
+        {
+            result.error = makeError(QStringLiteral("unknown_field"),
+                                     QStringLiteral("No %1 field matches \"%2\".").arg(query.kind, field));
+            result.error.kind = query.kind;
+            result.error.key = field;
+            return result;
+        }
+    }
+    const bool civUsed = query.civ >= 0 && (!only || only->perCiv());
+    if (civUsed && query.civ >= civKind().count(session_, 0))
+    {
+        result.error = unknownCiv(query.civ);
+        return result;
+    }
+
+    result.gameDat = gameDataset_.datPath;
+    result.modDat = savePath_;
+    result.modFileVersion = QString::fromLatin1(session_.dat()->FileVersion.c_str());
+    result.hasDat = QFileInfo::exists(savePath_);
+    if (!result.hasDat)
+    {
+        // The mod reads the game's data, so there is nothing to compare.
+        result.gameFileVersion = result.modFileVersion;
+        for (const EntityKind *kind : entityKinds())
+            result.counts.append({kind->key(), kind->count(session_, 0), kind->count(session_, 0)});
+        result.ok = true;
+        return result;
+    }
+
+    Session game;
+    QString error;
+    QStringList gameWarnings;
+    if (!game.open(gameDataset_, &error, &gameWarnings))
+    {
+        result.error = makeError(QStringLiteral("load_failed"), error);
+        return result;
+    }
+    for (const QString &warning : gameWarnings)
+    {
+        if (!warnings_.contains(warning))
+            result.warnings.append(warning);
+    }
+    result.gameFileVersion = QString::fromLatin1(game.dat()->FileVersion.c_str());
+    for (const EntityKind *kind : entityKinds())
+        result.counts.append({kind->key(), kind->count(session_, 0), kind->count(game, 0)});
+
+    const int civs = std::min(civKind().count(session_, 0), civKind().count(game, 0));
+    if (civUsed && query.civ >= civs)
+    {
+        result.error = unknownCiv(query.civ);
+        return result;
+    }
+    QList<int> unitCivs;
+    for (int civ = 0; civ < civs; ++civ)
+    {
+        if (!civUsed || civ == query.civ)
+            unitCivs.append(civ);
+    }
+
+    // Both sides are written as the older version stores them, so a field
+    // the newer version added doesn't make every entity differ.
+    const int version = std::min(session_.gameVersion(), game.gameVersion());
+    const QList<QRegularExpression> patterns = fieldPatterns(query.fields);
+    QList<DiffItem> items;
+    const auto addItem = [&items](const EntityKind &kind, int id, const QList<int> &itemCivs, const EntityDiff &diff) {
+        DiffItem item;
+        item.status = diff.status;
+        item.kind = kind.key();
+        item.id = id;
+        item.civs = itemCivs;
+        item.fields = diff.fields;
+        item.unlisted = diff.unlisted;
+        items.append(item);
+    };
+    for (const EntityKind *kind : entityKinds())
+    {
+        if (only && kind != only)
+            continue;
+        if (!kind->perCiv())
+        {
+            const int count = std::max(kind->count(session_, 0), kind->count(game, 0));
+            for (int id = 0; id < count; ++id)
+            {
+                if (const std::optional<EntityDiff> diff = compareEntity(*kind, session_, game, 0, id, version, patterns))
+                    addItem(*kind, id, {}, *diff);
+            }
+            continue;
+        }
+
+        int count = 0;
+        for (const int civ : unitCivs)
+            count = std::max({count, kind->count(session_, civ), kind->count(game, civ)});
+        for (int id = 0; id < count; ++id)
+        {
+            // Civs with the same difference share one item.
+            QList<std::pair<EntityDiff, QList<int>>> groups;
+            for (const int civ : unitCivs)
+            {
+                const std::optional<EntityDiff> diff = compareEntity(*kind, session_, game, civ, id, version, patterns);
+                if (!diff)
+                    continue;
+                const auto group = std::find_if(groups.begin(), groups.end(),
+                                                [&diff](const auto &entry) { return sameDiff(entry.first, *diff); });
+                if (group != groups.end())
+                    group->second.append(civ);
+                else
+                    groups.append({*diff, {civ}});
+            }
+            for (const auto &[diff, groupCivs] : groups)
+                addItem(*kind, id, groupCivs, diff);
+        }
+    }
+
+    for (const DiffItem &item : items)
+    {
+        switch (item.status)
+        {
+        case DiffStatus::Changed: ++result.changed; break;
+        case DiffStatus::OnlyInGame: ++result.onlyInGame; break;
+        case DiffStatus::OnlyInMod: ++result.onlyInMod; break;
+        }
+    }
+    result.total = static_cast<int>(items.size());
+    result.items = items.mid(query.offset, query.limit);
+
+    // Names and labels only for the page: they cost a lookup each.
+    for (DiffItem &item : result.items)
+    {
+        const EntityKind &kind = *findEntityKind(item.kind);
+        const int civ = item.civs.isEmpty() ? 0 : item.civs.first();
+        // A mod's blank placeholder that the game has since filled is named
+        // as the game names it.
+        const bool gameNamed = item.status == DiffStatus::OnlyInGame
+                               || (item.status == DiffStatus::Changed && kind.internalName(session_, civ, item.id).isEmpty());
+        const Session &named = gameNamed ? game : session_;
+        item.name = kind.name(named, civ, item.id);
+        item.internalName = kind.internalName(named, civ, item.id);
+        for (DiffField &field : item.fields)
+        {
+            if (field.labelKind != RefKind::None)
+            {
+                if (field.modValue.isValid())
+                    field.modLabel = refName(session_, field.labelKind, field.modValue.toInt(), civ);
+                if (field.gameValue.isValid())
+                    field.gameLabel = refName(game, field.labelKind, field.gameValue.toInt(), civ);
+            }
+            if (field.stringId)
+            {
+                if (field.modValue.isValid())
+                    field.modText = session_.names().text(field.modValue.toInt());
+                if (field.gameValue.isValid())
+                    field.gameText = game.names().text(field.gameValue.toInt());
+            }
+        }
+    }
+    result.ok = true;
     return result;
 }
 

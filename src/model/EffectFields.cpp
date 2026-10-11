@@ -1,6 +1,8 @@
 #include "model/EffectFields.h"
 
 #include <cmath>
+#include <cstdint>
+#include <limits>
 
 #include "genie/dat/Techage.h"
 
@@ -89,7 +91,24 @@ QString baseName(int base)
     }
 }
 
+// Older versions store the effect name in 31 bytes, with a terminating NUL;
+// AoE1 DE and AoE2 DE store a length.
+bool hasFixedName(genie::GameVersion version)
+{
+    return (version > genie::GV_LatestTap && version < genie::GV_C2) || version < genie::GV_Tapsa
+           || version > genie::GV_LatestDE2;
+}
+
 enum class Slot { A, B, C, D };
+
+// The slot's member, for numberField.
+auto slotAccess(int command, Slot slot)
+{
+    return [command, slot](auto &effect) -> auto & {
+        genie::EffectCommand &c = effect.effect.EffectCommands.at(command);
+        return slot == Slot::A ? c.A : slot == Slot::B ? c.B : c.C;
+    };
+}
 
 QVariant slotValue(const EffectRef &effect, int command, Slot slot)
 {
@@ -104,6 +123,11 @@ QVariant slotValue(const EffectRef &effect, int command, Slot slot)
     return {};
 }
 
+bool always(const EffectRef &)
+{
+    return true;
+}
+
 // "command2.amount": a field key within command `command` (0-based).
 QString commandKey(int command, const QString &key)
 {
@@ -111,22 +135,23 @@ QString commandKey(int command, const QString &key)
 }
 
 // `key` is the part after "commandN.". `omitUnused` drops the row when the
-// slot is still the unused value -1. Amount and Modify Tech's Action pass
-// false: -1 is a real value there.
+// slot is still the unused value -1; it can still be written. Amount and
+// Modify Tech's Action pass false: -1 is a real value there.
 void appendSlot(QList<FieldDesc<EffectRef>> &list, const QString &group, int command, const QString &key,
                 const QString &name, Slot slot, RefKind ref = RefKind::None, bool omitUnused = true)
 {
-    FieldDesc<EffectRef> field{commandKey(command, key), name, group, {},
-                               [command, slot](const EffectRef &effect) { return slotValue(effect, command, slot); }};
+    std::function<bool(const EffectRef &)> applies;
     if (omitUnused)
     {
-        field.applies = [command, slot](const EffectRef &effect) {
-            return slotValue(effect, command, slot).toInt() >= 0;
-        };
+        applies = [command, slot](const EffectRef &effect) { return slotValue(effect, command, slot).toInt() >= 0; };
     }
+    const auto amount = [command](auto &effect) -> auto & { return effect.effect.EffectCommands.at(command).D; };
+    FieldDesc<EffectRef> field =
+        slot == Slot::D
+            ? numberField<EffectRef>(commandKey(command, key), name, group, std::move(applies), amount)
+            : numberField<EffectRef>(commandKey(command, key), name, group, std::move(applies), slotAccess(command, slot));
+    field.settable = always;
     field.ref = ref;
-    if (slot == Slot::D)
-        field.typeId = QMetaType::Float;
     list.append(std::move(field));
 }
 
@@ -141,6 +166,12 @@ void appendTechId(QList<FieldDesc<EffectRef>> &list, const QString &group, int c
     field.applies = [command](const EffectRef &effect) {
         return std::lround(effect.effect.EffectCommands.at(command).D) >= 0;
     };
+    field.settable = always;
+    field.set = [command](EffectRef &effect, const QVariant &value) {
+        effect.effect.EffectCommands.at(command).D = static_cast<float>(value.toInt());
+    };
+    field.minimum = -1;
+    field.maximum = std::numeric_limits<int16_t>::max();
     field.ref = RefKind::Tech;
     list.append(std::move(field));
 }
@@ -155,10 +186,11 @@ void appendMode(QList<FieldDesc<EffectRef>> &list, const QString &group, int com
 void appendCommand(QList<FieldDesc<EffectRef>> &list, int command, int type, genie::GameVersion version)
 {
     const QString group = QStringLiteral("Command %1").arg(command + 1);
-    list.append({commandKey(command, QStringLiteral("type")), QStringLiteral("Type"), group, {},
-                 [command](const EffectRef &effect) {
-                     return intValue(effect.effect.EffectCommands.at(command).Type);
-                 }});
+    // Changing the type keeps the slot values; the fields after it change.
+    list.append(numberField<EffectRef>(commandKey(command, QStringLiteral("type")), QStringLiteral("Type"), group, {},
+                                       [command](auto &effect) -> auto & {
+                                           return effect.effect.EffectCommands.at(command).Type;
+                                       }));
     list.last().ref = RefKind::EffectType;
 
     if (!effectTypeKnown(version, type))
@@ -295,14 +327,21 @@ QList<int> effectModeIds(genie::GameVersion version, RefKind kind)
 QList<FieldDesc<EffectRef>> effectFields(const genie::Effect &effect, genie::GameVersion version)
 {
     const QString general = QStringLiteral("General");
+    // A length-prefixed name has no fixed limit; 255 is a conservative one.
+    const int nameLength = hasFixedName(version) ? genie::Effect::getNameSize() - 1 : 255;
     QList<FieldDesc<EffectRef>> list = {
         {"id", "ID", general, {}, [](const EffectRef &e) { return QVariant(e.id); }},
-        {"internal_name", "Internal name", general, {},
-         [](const EffectRef &e) { return QVariant(QString::fromLatin1(e.effect.Name)); }},
+        textField<EffectRef>("internal_name", "Internal name", general, {},
+                             [](auto &e) -> auto & { return e.effect.Name; }, nameLength),
         {"command_count", "Command count", general, {},
          [](const EffectRef &e) { return QVariant(static_cast<int>(e.effect.EffectCommands.size())); }},
     };
-    list[1].typeId = QMetaType::QString;
+    // New commands have no type (255) and unused slots; removing commands
+    // drops them from the end.
+    list[2].set = [](EffectRef &e, const QVariant &value) {
+        e.effect.EffectCommands.resize(static_cast<std::size_t>(value.toInt()));
+    };
+    list[2].maximum = std::numeric_limits<int16_t>::max();
     for (int i = 0; i < static_cast<int>(effect.EffectCommands.size()); ++i)
         appendCommand(list, i, effect.EffectCommands[i].Type, version);
     return list;

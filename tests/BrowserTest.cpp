@@ -395,7 +395,8 @@ void BrowserTest::editFields()
     selectId(techList, 22);
     const QModelIndex required = valueIndex(techFields, QStringLiteral("Required tech 1"));
     QVERIFY(required.flags() & Qt::ItemIsEditable);
-    QVERIFY(!(valueIndex(techFields, QStringLiteral("Required tech count")).flags() & Qt::ItemIsEditable));
+    // Double-clicking the effect shows it rather than editing it.
+    QVERIFY(!(valueIndex(techFields, QStringLiteral("Effect")).flags() & Qt::ItemIsEditable));
     QAbstractItemDelegate *techDelegate = techFields->itemDelegateForIndex(required);
     editor.reset(techDelegate->createEditor(techFields->viewport(), QStyleOptionViewItem(), required));
     auto *combo = qobject_cast<QComboBox *>(editor.get());

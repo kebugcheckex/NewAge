@@ -24,6 +24,11 @@ struct TechRef
 // order. Groups appear in the order of their first field.
 const QList<FieldDesc<TechRef>> &techFields();
 
+// Sets every member techFields() reads to zero, keeping vector sizes. Two
+// techs whose masked copies serialize differently also differ outside the
+// listed fields.
+void maskTechFields(genie::Tech &tech);
+
 // Name of a tech Type value ("Age" for 2), or "Unknown". Views show it as
 // "2 - Age".
 QString techTypeName(int type);
